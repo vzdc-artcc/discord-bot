@@ -50,7 +50,7 @@ class BreakRequestActions(discord.ui.View):
                                         ephemeral=True)
 
     @discord.ui.button(label="Done / Delete", style=discord.ButtonStyle.danger, custom_id="delete_break_request")
-    async def delete_button(self, interaction: discord.Interaction, ):
+    async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button  ):
 
         await interaction.response.defer(ephemeral=True)
 

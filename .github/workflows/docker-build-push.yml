@@ -37,14 +37,8 @@ jobs:
 
       - name: Set version number
         run: |
-          if [ -f "package.json" ]; then
-            VERSION=v$(node -p "require('./package.json').version")-${{ steps.extract_branch.outputs.branch }}.${{ env.COMMIT_HASH }}
+            VERSION=v${{ env.COMMIT_HASH }}
             echo "VERSION=${VERSION}" >> $GITHUB_ENV
-            npm version "${VERSION}" --no-git-tag-version --allow-same-version
-          else
-            echo "package.json not found!"
-            exit 1
-          fi
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v4

@@ -38,6 +38,7 @@ def get_banner_url(banner_key: str) -> str:
     if not IMAGE_BASE_URL:
         print("Warning: IMAGE_BASE_URL not configured. Cannot construct banner URL.")
         return None
+    print(f"{IMAGE_BASE_URL}/{banner_key}")
     return f"{IMAGE_BASE_URL}/{banner_key}"
 
 

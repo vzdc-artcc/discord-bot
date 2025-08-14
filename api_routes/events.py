@@ -117,7 +117,11 @@ def create_event_post():
 
         if posted_positions_data:
             for pos_item in posted_positions_data:
-                pos_name = pos_item.get("requestedPosition", pos_item.get("finalPosition", "N/A Position"))
+
+                if not pos_item.get("published", False):
+                    continue
+
+                pos_name = pos_item.get("finalPosition", pos_item.get("requestedPosition", "N/A Position"))
                 user_data = pos_item.get("user")
 
                 controller_display = "(Open)"

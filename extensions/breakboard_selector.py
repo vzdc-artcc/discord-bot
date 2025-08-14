@@ -85,6 +85,8 @@ class RoleSelector(commands.Cog):
         if os.path.exists(ROLE_SELECTOR_MESSAGE_ID_FILE):
             with open(ROLE_SELECTOR_MESSAGE_ID_FILE, "r") as f:
                 data = json.load(f)
+                print(f"Raw Data: {f}")
+                print(f"Formatted Data: {data}")
                 self.message_id = data.get("message_id")
                 if data.get("channel_id") != self.channel_id:
                     print("Warning: Role selector channel ID mismatch in saved data. Resetting.")

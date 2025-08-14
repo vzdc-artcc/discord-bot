@@ -4,7 +4,7 @@ import json
 import os
 from config import BREAK_BOARD_CHANNEL_ID, BREAK_BOARD_ROLE_MAP
 
-ROLE_SELECTOR_MESSAGE_ID_FILE = "./data/breakboard_selector_message_id.json"
+ROLE_SELECTOR_MESSAGE_ID_FILE = "../data/breakboard_selector_message_id.json"
 
 class RoleSelectionButtons(discord.ui.View):
     def __init__(self, bot):

@@ -8,7 +8,7 @@ import json
 
 bp = Blueprint("training_api", __name__, url_prefix="/training")
 
-TRAINING_CHANNELS_FILE = "data/training_channels.json"
+TRAINING_CHANNELS_FILE = f"{os.getcwd()}/data/training_channels.json"
 
 
 def load_training_channels():

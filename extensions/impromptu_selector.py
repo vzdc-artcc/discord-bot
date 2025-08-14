@@ -4,7 +4,7 @@ import json
 import os
 from config import IMPROMPTU_CHANNEL_ID, IMPROMPTU_ROLE_MAP
 
-ROLE_SELECTOR_MESSAGE_ID_FILE = "data/impromptu_selector_message_id.json"
+ROLE_SELECTOR_MESSAGE_ID_FILE = f"{os.getcwd()}/data/impromptu_selector_message_id.json"
 
 class RoleSelectionButtons(discord.ui.View):
     def __init__(self, bot):

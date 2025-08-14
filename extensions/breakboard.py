@@ -7,7 +7,7 @@ import os
 from config import BREAK_BOARD_CHANNEL_ID, BREAK_BOARD_ROLE_MAP
 import re
 
-MESSAGE_ID_FILE = "data/notification_message_id.json"
+MESSAGE_ID_FILE = f"{os.getcwd()}/data/notification_message_id.json"
 
 class BreakRequestActions(discord.ui.View):
     def __init__(self, request_user_id: int):

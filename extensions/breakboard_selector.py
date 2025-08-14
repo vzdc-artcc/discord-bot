@@ -4,7 +4,7 @@ import json
 import os
 from config import BREAK_BOARD_CHANNEL_ID, BREAK_BOARD_ROLE_MAP
 
-ROLE_SELECTOR_MESSAGE_ID_FILE = "/app/data/breakboard_selector_message_id.json"
+ROLE_SELECTOR_MESSAGE_ID_FILE = f"{os.getcwd()}/data/breakboard_selector_message_id.json"
 
 class RoleSelectionButtons(discord.ui.View):
     def __init__(self, bot):
@@ -82,16 +82,9 @@ class RoleSelector(commands.Cog):
 
         os.makedirs(os.path.dirname(ROLE_SELECTOR_MESSAGE_ID_FILE), exist_ok=True)
 
-
-        print(os.listdir(os.path.dirname(ROLE_SELECTOR_MESSAGE_ID_FILE)))
-        print(os.listdir("/app/data"))
-        print(os.listdir(os.getcwd()))
-        print(os.listdir(f"{os.getcwd()}/data"))
         if os.path.exists(ROLE_SELECTOR_MESSAGE_ID_FILE):
             with open(ROLE_SELECTOR_MESSAGE_ID_FILE, "r") as f:
                 data = json.load(f)
-                print(f"Raw Data: {f}")
-                print(f"Formatted Data: {data}")
                 self.message_id = data.get("message_id")
                 if data.get("channel_id") != self.channel_id:
                     print("Warning: Role selector channel ID mismatch in saved data. Resetting.")

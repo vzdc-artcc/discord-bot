@@ -226,7 +226,8 @@ class BreakBoard(commands.Cog):
     async def send_notification(self, interaction: discord.Interaction, role_name: str, role_id: int,
                                 wait_time: str = "no specific time"):
 
-        file = os.read(MESSAGE_ID_FILE)
+        with open(MESSAGE_ID_FILE, "r") as f:
+            file = f.read()
         time = datetime.datetime.utcnow()
         print(f"BREAKBOARD FILE: {file}, time: {time}")
 

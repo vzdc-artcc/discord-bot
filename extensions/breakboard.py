@@ -26,7 +26,7 @@ class BreakRequestActions(discord.ui.View):
             await interaction.followup.send("An error occurred after acknowledging this action.", ephemeral=True)
 
     @discord.ui.button(label="Claim Position", style=discord.ButtonStyle.success, custom_id="claim_break_position")
-    async def claim_button(self, interaction: discord.Interaction):
+    async def claim_button(self, interaction: discord.Interaction, button: discord.ui.Button ):
         await interaction.response.defer()
 
         reliever_user = interaction.user
@@ -258,25 +258,11 @@ class BreakBoard(commands.Cog):
             title="Controller Break Notification System",
             description=(
                 "Use the buttons below to request a break for specific positions.\n"
-                "You'll be asked how long you can wait for relief.\n\n"
-                "Once your request is picked up by another controller, or if it's no longer needed, "
-                "**please delete the notification message** to keep this channel clear. "
-                "The message will include a 'Claim' and 'Done / Delete' button."
+                "- Once your request is picked up by another controller, or if it's no longer needed, "
+                "**please delete the notification message** to keep this channel clear.\n "
+                "- The message will include a 'Claim' and 'Done / Delete' button."
             ),
             color=discord.Color.blue()
-        )
-        embed.add_field(
-            name="Available Positions",
-            value=(
-                "• **Unrestricted GND**: For Ground controllers without specific certifications.\n"
-                "• **Tier 1 GND**: For Ground controllers with Tier 1 certification.\n"
-                "• **Unrestricted TWR**: For Tower controllers without specific certifications.\n"
-                "• **Tier 1 TWR**: For Tower controllers with Tier 1 certification.\n"
-                "• **Unrestricted APP**: For Approach controllers without specific certifications.\n"
-                "• **PCT**: For controllers working a TRACON sector.\n"
-                "• **Center**: For controllers working a Center sector."
-            ),
-            inline=False
         )
 
         view = BreakBoardButtons(self.bot)

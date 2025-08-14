@@ -115,6 +115,24 @@ BREAK_BOARD_ROLE_MAP = {
     "center": CENTER_ROLE_ID,
 }
 
+# Impromptu
+IMPROMPTU_CHANNEL_ID = int(os.getenv("IMPROMPTU_CHANNEL_ID"))
+
+IMPROMPTU_CTR_ROLE_ID = int(os.getenv("IMPROMPTU_CTR_ROLE_ID"))
+IMPROMPTU_APP_ROLE_ID = int(os.getenv("IMPROMPTU_APP_ROLE_ID"))
+IMPROMPTU_TWR_ROLE_ID = int(os.getenv("IMPROMPTU_TWR_ROLE_ID"))
+IMPROMPTU_GND_ROLE_ID = int(os.getenv("IMPROMPTU_GND_ROLE_ID"))
+
+IMPROMPTU_ROLE_MAP = {
+    "impromptu_ctr": IMPROMPTU_CTR_ROLE_ID,
+    "impromptu_app": IMPROMPTU_APP_ROLE_ID,
+    "impromptu_twr": IMPROMPTU_TWR_ROLE_ID,
+    "impromptu_gnd": IMPROMPTU_GND_ROLE_ID,
+}
+
+# Events
+IMAGE_BASE_URL = os.getenv("IMAGE_BASE_URL")
+
 # Rating Maps
 atc_rating = {
     -1: 'INA', 0: 'SUS', 1: 'OBS', 2: 'S1', 3: 'S2', 4: 'S3', 5: 'C1', 6: 'C2', 7: 'C3',
@@ -132,3 +150,7 @@ military_rating = {
 facility = {
     0: "OBS", 1: "FSS", 2: "DEL", 3: "GND", 4: "TWR", 5: "APP", 6: "CTR"
 }
+
+# Training
+
+TRAINING_CATEGORY_ID = int(os.getenv("TRAINING_CATEGORY_ID"))

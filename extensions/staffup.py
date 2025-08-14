@@ -2,8 +2,7 @@ import asyncio
 import discord
 import aiohttp
 import traceback
-from datetime import datetime
-
+from datetime import datetime, timezone
 from discord import Embed
 from discord.ext import commands, tasks
 
@@ -105,7 +104,7 @@ class Staffup(commands.Cog):
 
                             if isinstance(callsign, str) and callsign.startswith(tuple(watched_positions)):
 
-                                display_name = vatsim_name  # Default to VATSIM name
+                                display_name = vatsim_name
                                 if cid and vatsim_name == str(cid):
                                     fetched_name = await self.get_real_name(str(cid))
                                     if fetched_name != str(cid):
@@ -132,15 +131,32 @@ class Staffup(commands.Cog):
                             offline_ctrl_data = next((c for c in online_zdc_controllers if c['cid'] == cid), None)
 
                             if offline_ctrl_data and offline_ctrl_data['frequency'] != "199.998":
-                                now_utc = datetime.utcnow()
+                                now_utc = datetime.now(timezone.utc)
                                 login_time = offline_ctrl_data.get('login_time_utc')
 
                                 duration_str = "N/A"
                                 login_time_dt = None
-                                if login_time:
-                                    try:
-                                        login_time_dt = parse_vatsim_logon_time(login_time)
 
+                                if login_time:
+                                    if isinstance(login_time, str):
+                                        try:
+                                            login_time_dt = parse_vatsim_logon_time(login_time)
+                                        except Exception as parse_e:
+                                            print(
+                                                f"Error parsing stored login_time string for {offline_ctrl_data['callsign']}: {parse_e}")
+                                            login_time_dt = None
+                                    elif isinstance(login_time, datetime):
+
+                                        if login_time.tzinfo is None:
+                                            login_time_dt = login_time.replace(tzinfo=timezone.utc)
+                                        else:
+                                            login_time_dt = login_time
+                                    else:
+                                        print(
+                                            f"Unexpected type for login_time_utc for {offline_ctrl_data['callsign']}: {type(login_time)}")
+
+                                if login_time_dt:
+                                    try:
                                         duration = now_utc - login_time_dt
                                         days = duration.days
                                         hours, remainder = divmod(duration.seconds, 3600)
@@ -172,9 +188,9 @@ class Staffup(commands.Cog):
                                 embed.add_field(name="Frequency", value=offline_ctrl_data['frequency'], inline=True)
 
                                 if login_time_dt:
-                                    embed.add_field(name="Online From", value=f"<t:{int(login_time_dt.timestamp())}:t>",
+                                    embed.add_field(name="Logon Time", value=f"<t:{int(login_time_dt.timestamp())}:t>",
                                                     inline=True)
-                                    embed.add_field(name="Offline At", value=f"<t:{int(now_utc.timestamp())}:t>",
+                                    embed.add_field(name="Logoff Time", value=f"<t:{int(now_utc.timestamp())}:t>",
                                                     inline=True)
                                     embed.add_field(name="Duration", value=duration_str, inline=True)
                                 else:
@@ -185,8 +201,6 @@ class Staffup(commands.Cog):
                                 print(f"Sent offline message for: {offline_ctrl_data['callsign']}")
 
                                 online_zdc_controllers = [c for c in online_zdc_controllers if c['cid'] != cid]
-
-                        # Find controllers who just came online
                         came_online_cids = vatsim_online_cids - current_online_cids
 
                         for cid in came_online_cids:
@@ -196,14 +210,15 @@ class Staffup(commands.Cog):
                                 logon_time_str = online_ctrl_data.get('logon_time')
                                 if logon_time_str:
                                     try:
-                                        # Use the new helper function here
                                         online_ctrl_data['login_time_utc'] = parse_vatsim_logon_time(logon_time_str)
-                                    except Exception:  # Catch any parsing error
+                                    except Exception:
                                         print(
                                             f"Could not parse VATSIM logon_time '{logon_time_str}' for CID {cid}. Using current UTC.")
-                                        online_ctrl_data['login_time_utc'] = datetime.utcnow()
+                                        online_ctrl_data['login_time_utc'] = datetime.now(
+                                            timezone.utc)
                                 else:
-                                    online_ctrl_data['login_time_utc'] = datetime.utcnow()
+                                    online_ctrl_data['login_time_utc'] = datetime.now(
+                                        timezone.utc)
 
                                 embed = Embed(
                                     title=f"{online_ctrl_data['callsign']} - Online",
@@ -213,7 +228,7 @@ class Staffup(commands.Cog):
                                                 value=f"{online_ctrl_data['display_name']} ({atc_rating.get(online_ctrl_data['rating'], 'Unknown Rating')})",
                                                 inline=True)
                                 embed.add_field(name="Frequency", value=online_ctrl_data['frequency'], inline=True)
-                                embed.add_field(name="Online From",
+                                embed.add_field(name="Logon Time",
                                                 value=f"<t:{int(online_ctrl_data['login_time_utc'].timestamp())}:t>",
                                                 inline=True)
                                 embed.set_footer(text="vZDC Controller Status")
@@ -231,6 +246,7 @@ class Staffup(commands.Cog):
         except Exception as e:
             print(f"An unexpected error occurred in check_online_controllers: {e}")
             traceback.print_exc()
+
 
 async def setup(bot):
     await bot.add_cog(Staffup(bot))

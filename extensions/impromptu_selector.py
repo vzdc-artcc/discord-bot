@@ -2,9 +2,9 @@ import discord
 from discord.ext import commands
 import json
 import os
-from config import BREAK_BOARD_CHANNEL_ID, BREAK_BOARD_ROLE_MAP
+from config import IMPROMPTU_CHANNEL_ID, IMPROMPTU_ROLE_MAP
 
-ROLE_SELECTOR_MESSAGE_ID_FILE = "data/role_selector_message_id.json"
+ROLE_SELECTOR_MESSAGE_ID_FILE = "data/impromptu_selector_message_id.json"
 
 class RoleSelectionButtons(discord.ui.View):
     def __init__(self, bot):
@@ -16,7 +16,7 @@ class RoleSelectionButtons(discord.ui.View):
         await interaction.response.send_message("An error occurred while processing your role request.", ephemeral=True)
 
     async def assign_or_remove_role(self, interaction: discord.Interaction, role_name_display: str, role_id: int):
-        await interaction.response.defer(ephemeral=True) # Defer immediately for responsiveness
+        await interaction.response.defer(ephemeral=True)
 
         member = interaction.user
         role = interaction.guild.get_role(role_id)
@@ -45,40 +45,28 @@ class RoleSelectionButtons(discord.ui.View):
             except Exception as e:
                 await interaction.followup.send(f"An error occurred while adding the role: {e}", ephemeral=True)
 
-    @discord.ui.button(label="Unrestricted GND", style=discord.ButtonStyle.secondary, custom_id="role_gnd_unrestricted")
-    async def gnd_unrestricted_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Unrestricted GND", BREAK_BOARD_ROLE_MAP["gnd_unrestricted"])
+    @discord.ui.button(label="Impromptu Ground", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_gnd")
+    async def impromptu_gnd_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.assign_or_remove_role(interaction, "Impromptu Ground", IMPROMPTU_ROLE_MAP["impromptu_gnd"])
 
-    @discord.ui.button(label="Tier 1 GND", style=discord.ButtonStyle.secondary, custom_id="role_gnd_tier1")
-    async def gnd_tier1_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Tier 1 GND", BREAK_BOARD_ROLE_MAP["gnd_tier1"])
+    @discord.ui.button(label="Impromptu Tower", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_twr")
+    async def impromptu_twr_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.assign_or_remove_role(interaction, "Impromptu Tower", IMPROMPTU_ROLE_MAP["impromptu_twr"])
 
-    @discord.ui.button(label="Unrestricted TWR", style=discord.ButtonStyle.secondary, custom_id="role_twr_unrestricted")
-    async def twr_unrestricted_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Unrestricted TWR", BREAK_BOARD_ROLE_MAP["twr_unrestricted"])
+    @discord.ui.button(label="Impromptu Approach", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_app")
+    async def impromptu_app_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.assign_or_remove_role(interaction, "Impromptu Approach", IMPROMPTU_ROLE_MAP["impromptu_app"])
 
-    @discord.ui.button(label="Tier 1 TWR", style=discord.ButtonStyle.secondary, custom_id="role_twr_tier1")
-    async def twr_tier1_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Tier 1 TWR", BREAK_BOARD_ROLE_MAP["twr_tier1"])
-
-    @discord.ui.button(label="Unrestricted APP", style=discord.ButtonStyle.secondary, custom_id="role_app_unrestricted")
-    async def app_unrestricted_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Unrestricted APP", BREAK_BOARD_ROLE_MAP["app_unrestricted"])
-
-    @discord.ui.button(label="PCT", style=discord.ButtonStyle.secondary, custom_id="role_pct")
-    async def pct_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "PCT", BREAK_BOARD_ROLE_MAP["pct"])
-
-    @discord.ui.button(label="Center", style=discord.ButtonStyle.secondary, custom_id="role_center")
-    async def center_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Center", BREAK_BOARD_ROLE_MAP["center"])
+    @discord.ui.button(label="Impromptu Center", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_ctr")
+    async def impromptu_ctr_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.assign_or_remove_role(interaction, "Impromptu Center", IMPROMPTU_ROLE_MAP["impromptu_ctr"])
 
 
-class RoleSelector(commands.Cog):
+class ImpromptuSelector(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.message_id = None
-        self.channel_id = BREAK_BOARD_CHANNEL_ID
+        self.channel_id = IMPROMPTU_CHANNEL_ID
 
         os.makedirs(os.path.dirname(ROLE_SELECTOR_MESSAGE_ID_FILE), exist_ok=True)
 
@@ -106,46 +94,29 @@ class RoleSelector(commands.Cog):
             print(f"Error: Role Selector channel with ID {self.channel_id} not found.")
             return
 
-        # Try to fetch existing message
         if self.message_id:
             try:
                 message = await channel.fetch_message(self.message_id)
                 self.bot.add_view(RoleSelectionButtons(self.bot), message_id=message.id)
                 print(f"Found existing role selector message (ID: {self.message_id}). Re-attaching view.")
-                return # Message found, no need to send new
+                return
             except discord.NotFound:
                 print("Previous role selector message not found. Sending a new one.")
                 self.message_id = None
             except discord.Forbidden:
                 print(f"Bot doesn't have permission to fetch message {self.message_id} in channel {self.channel_id}.")
                 self.message_id = None
-
-        # If we reach here, send a new message
         await self.send_initial_embed_with_buttons(channel)
 
     async def send_initial_embed_with_buttons(self, channel: discord.TextChannel):
         embed = discord.Embed(
-            title="🔔 Controller Notification Preferences 🔔",
+            title="Impromptu Selector",
             description=(
-                "Click the buttons below to **opt in or out** of receiving notifications "
-                "when controllers request a break for specific positions.\n\n"
+                "Click the buttons below to **opt in or out** of receiving notifications\n "
                 "• If you have the role, clicking the button will **remove** it.\n"
                 "• If you don't have the role, clicking the button will **add** it."
             ),
             color=discord.Color.gold()
-        )
-        embed.add_field(
-            name="Available Notification Groups",
-            value=(
-                "• **Unrestricted GND**: General Ground positions.\n"
-                "• **Tier 1 GND**: Specific Ground certifications.\n"
-                "• **Unrestricted TWR**: General Tower positions.\n"
-                "• **Tier 1 TWR**: Specific Tower certifications.\n"
-                "• **Unrestricted APP**: General Approach positions.\n"
-                "• **PCT**: TRACON (Terminal Radar Approach Control).\n"
-                "• **Center**: ARTCC (Air Route Traffic Control Center)."
-            ),
-            inline=False
         )
         embed.set_footer(text="Your role preferences determine which break requests you see.")
 
@@ -155,4 +126,4 @@ class RoleSelector(commands.Cog):
         print(f"Sent new role selector message (ID: {message.id}) in channel {channel.name}.")
 
 async def setup(bot):
-    await bot.add_cog(RoleSelector(bot))
+    await bot.add_cog(ImpromptuSelector(bot))

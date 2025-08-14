@@ -1,67 +1,21 @@
-# extensions/announcements_api.py
 import discord
-from discord.ext import commands
-from flask import Flask, request, jsonify
-from waitress import serve
-import asyncio
-import threading
-import logging
+from flask import Blueprint, request, jsonify
 import traceback
 from datetime import datetime
-
-from config import API_SECRET_KEY, API_PORT, ANNOUNCEMENT_TYPES, atc_rating
-
-log = logging.getLogger('werkzeug')
-log.setLevel(logging.ERROR)
-app = Flask(__name__)
-
-def run_discord_op(coro):
-
-    if not hasattr(app, 'bot_loop') or app.bot_loop is None:
-        raise RuntimeError("Bot event loop not set up in Flask app. Is the bot ready?")
-
-    future = asyncio.run_coroutine_threadsafe(coro, app.bot_loop)
-    return future.result()
+from config import ANNOUNCEMENT_TYPES, atc_rating
+from flask import current_app as app
 
 
-class AnnouncementsAPI(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-        self.api_running = False
-        self.api_thread = None
+bp = Blueprint('announcements', __name__)
 
-        app.bot = self.bot
-        app.bot_loop = None
-        app.secret_key = API_SECRET_KEY
 
-    @commands.Cog.listener()
-    async def on_ready(self):
-        if not self.api_running:
-            print(f"Starting Announcements API listener on port {API_PORT}...")
-            app.bot_loop = asyncio.get_event_loop()
+@bp.route("/announcement", methods=["POST"])
 
-            self.api_thread = threading.Thread(target=self._run_flask_app)
-            self.api_thread.daemon = True
-            self.api_thread.start()
-            self.api_running = True
-            print("Announcements API listener thread started.")
-
-    def _run_flask_app(self):
-        serve(app, host="0.0.0.0", port=API_PORT)
-
-    @commands.command(name="restartannapi")
-    @commands.is_owner()
-    async def restart_ann_api(self, ctx):
-        await ctx.send(
-            "Announcements API server cannot be gracefully restarted directly. Please restart the entire bot process.")
-
-@app.route("/announcement", methods=["POST"])
-def post_announcement_api():
-
+def post_announcement():
     auth_header = request.headers.get("X-API-Key")
     if not auth_header or auth_header != app.secret_key:
         print(f"API Access Denied: Invalid X-API-Key provided: '{auth_header}'")
-        return jsonify({"error": "Unauthorized"}), 401
+        return jsonify({"error": "Unauthorized", "message": "Invalid API Key"}), 401
 
     if not request.is_json:
         print("API Error: Request must be JSON")
@@ -95,6 +49,7 @@ def post_announcement_api():
     title_prefix = announcement_config.get("title_prefix", "")
 
     bot_instance = app.bot
+    run_discord_op = app.run_discord_op
 
     try:
         run_discord_op(bot_instance.wait_until_ready())
@@ -151,7 +106,3 @@ def post_announcement_api():
             "code": 500,
             "message": str(e)
         }), 500
-
-
-async def setup(bot):
-    await bot.add_cog(AnnouncementsAPI(bot))

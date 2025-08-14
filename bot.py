@@ -14,7 +14,7 @@ bot = commands.Bot(command_prefix='!',
                    case_insensitive=True
                    )
 
-async def on_command_error(self, ctx, error):
+async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         await ctx.send("Sorry, that command doesn't exist.")
     elif isinstance(error, commands.MissingPermissions):

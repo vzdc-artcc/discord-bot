@@ -82,9 +82,10 @@ class RoleSelector(commands.Cog):
 
         os.makedirs(os.path.dirname(ROLE_SELECTOR_MESSAGE_ID_FILE), exist_ok=True)
 
-        print(os.getcwd())
-        print(os.path.dirname(ROLE_SELECTOR_MESSAGE_ID_FILE))
-        print(os.path.exists(ROLE_SELECTOR_MESSAGE_ID_FILE))
+
+        print(os.listdir(os.path.dirname(ROLE_SELECTOR_MESSAGE_ID_FILE)))
+        print(os.listdir("/app/data"))
+        print(os.listdir(os.getcwd()))
         if os.path.exists(ROLE_SELECTOR_MESSAGE_ID_FILE):
             with open(ROLE_SELECTOR_MESSAGE_ID_FILE, "r") as f:
                 data = json.load(f)

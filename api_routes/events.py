@@ -148,7 +148,7 @@ def create_event_post():
             embed.add_field(name="📍 Posted Positions", value=positions_value, inline=False)
 
         if event_banner_url:
-            embed.set_image(url=event_banner_url)
+            embed.set_thumbnail(url=event_banner_url)
 
         embed.set_footer(text="Automated Event Post")
 

@@ -161,7 +161,7 @@ def create_event_post():
             "channel_id": channel.id,
             "message_id": message.id,
             "url": message.jump_url
-        }), 201
+        }), 200
 
     except Exception as e:
         print(f"API Error during event posting: {e}")

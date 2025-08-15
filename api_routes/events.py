@@ -1,4 +1,7 @@
+import os.path
+
 import discord
+import requests
 from flask import Blueprint, request, jsonify
 import traceback
 from datetime import datetime
@@ -147,14 +150,28 @@ def create_event_post():
             positions_value = "\n".join(positions_lines)
             embed.add_field(name="📍 Posted Positions", value=positions_value, inline=False)
 
+        banner_key = event_data.get("bannerKey", "default_banner")
         if event_banner_url:
-            embed.set_thumbnail(url=event_banner_url)
+            # Fetch the image from the URL
+            response = requests.get(event_banner_url, stream=True)
+            response.raise_for_status()
+
+            # Save the image temporarily
+            temp_image_path = f"{banner_key}.png"
+            with open(temp_image_path, "wb") as temp_file:
+                for chunk in response.iter_content(1024):
+                    temp_file.write(chunk)
+
+            embed.set_image(f"attachment://{banner_key}.png")
 
         embed.set_footer(text="Automated Event Post")
 
         ping_message = " ".join(all_discord_mentions) if all_discord_mentions else "Heads up everyone!"
 
         message = run_discord_op(channel.send(content=ping_message, embed=embed))
+        if os.path.exists(f"{banner_key}.png"):
+            os.remove(f"{banner_key}.png")
+
         print(f"Successfully posted event announcement to channel {channel.name} (ID: {channel.id})")
 
         return jsonify({

@@ -130,7 +130,6 @@ def create_event_post():
                                                (
                                                    f"{user_data.get('firstName', '')} {user_data.get('lastName', '')}").strip()
                     assigned_discord_uid = user_data.get("discordUid")
-                    print(assigned_discord_uid)
 
                     if assigned_controller_name:
                         controller_display = assigned_controller_name

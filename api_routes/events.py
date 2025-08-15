@@ -140,9 +140,8 @@ def create_event_post():
                             except ValueError:
                                 print(f"Invalid Discord UID for {pos_name}: {assigned_discord_uid}")
 
-                print(format_event_time_range(pos_item.get("finalStartTime", ""), pos_item.get("finalEndTime", "")))
                 pos_time_range = format_event_time_range(pos_item.get("finalStartTime", ""), pos_item.get("finalEndTime", ""))
-                controller_time_window = f"*{pos_time_range}*" if event_times_formatted == pos_time_range else ""
+                controller_time_window = f"*{pos_time_range}*" if event_times_formatted != pos_time_range else ""
                 positions_lines.append(f"• **{pos_name}**: {controller_display} {controller_time_window}")
 
             positions_value = "\n".join(positions_lines)

@@ -31,7 +31,7 @@
       "class": "logging.handlers.RotatingFileHandler",
       "level": "DEBUG",
       "formatter": "json",
-      "filename": "logs/my_app.log.jsonl",
+      "filename": "logs/vzdc_discord_bot_logs.jsonl",
       "maxBytes": 10000000,
       "backupCount": 3
     },

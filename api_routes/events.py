@@ -9,7 +9,7 @@ from dateutil import parser as date_parser
 from config import ANNOUNCEMENT_TYPES, IMAGE_BASE_URL
 from flask import current_app
 
-bp = Blueprint('events_api', __name__, url_prefix='/events')
+bp = Blueprint('events_api', __name__)
 
 def format_event_time_range(start_str: str, end_str: str) -> str:
     try:

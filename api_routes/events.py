@@ -163,7 +163,7 @@ def create_event_post():
                 for chunk in response.iter_content(1024):
                     temp_file.write(chunk)
 
-            embed.set_image(f"attachment://{banner_key}.png")
+            embed.set_image(url=f"attachment://{banner_key}.png")
 
         embed.set_footer(text="Automated Event Post")
 

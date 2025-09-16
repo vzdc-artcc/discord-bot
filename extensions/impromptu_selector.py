@@ -45,25 +45,25 @@ class RoleSelectionButtons(discord.ui.View):
             except Exception as e:
                 await interaction.followup.send(f"An error occurred while adding the role: {e}", ephemeral=True)
 
-    @discord.ui.button(label="Impromptu Ground", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_gnd")
+    @discord.ui.button(label="Ground", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_gnd")
     async def impromptu_gnd_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.remove_existing_roles(interaction, IMPROMPTU_ROLE_MAP["impromptu_gnd"])
-        await self.assign_or_remove_role(interaction, "Delivery/Ground", IMPROMPTU_ROLE_MAP["impromptu_gnd"])
+        await self.assign_or_remove_role(interaction, "Impromptu Ground", IMPROMPTU_ROLE_MAP["impromptu_gnd"])
 
-    @discord.ui.button(label="Impromptu Tower", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_twr")
+    @discord.ui.button(label="Tower", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_twr")
     async def impromptu_twr_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.remove_existing_roles(interaction, IMPROMPTU_ROLE_MAP["impromptu_twr"])
-        await self.assign_or_remove_role(interaction, "Tower", IMPROMPTU_ROLE_MAP["impromptu_twr"])
+        await self.assign_or_remove_role(interaction, "Impromptu Tower", IMPROMPTU_ROLE_MAP["impromptu_twr"])
 
-    @discord.ui.button(label="Impromptu Approach", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_app")
+    @discord.ui.button(label="Approach", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_app")
     async def impromptu_app_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.remove_existing_roles(interaction, IMPROMPTU_ROLE_MAP["impromptu_app"])
-        await self.assign_or_remove_role(interaction, "Approach", IMPROMPTU_ROLE_MAP["impromptu_app"])
+        await self.assign_or_remove_role(interaction, "Impromptu Approach", IMPROMPTU_ROLE_MAP["impromptu_app"])
 
-    @discord.ui.button(label="Impromptu Center", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_ctr")
+    @discord.ui.button(label="Center", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_ctr")
     async def impromptu_ctr_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.remove_existing_roles(interaction, IMPROMPTU_ROLE_MAP["impromptu_ctr"])
-        await self.assign_or_remove_role(interaction, "Center", IMPROMPTU_ROLE_MAP["impromptu_ctr"])
+        await self.assign_or_remove_role(interaction, "Impromptu Center", IMPROMPTU_ROLE_MAP["impromptu_ctr"])
 
     async def remove_existing_roles(self, interaction: discord.Interaction, exclude_role_id):
         member = interaction.user
@@ -76,8 +76,6 @@ class RoleSelectionButtons(discord.ui.View):
                 await interaction.response.send_message("I don't have permissions to remove those roles. Please check my permissions.", ephemeral=True)
             except Exception as e:
                 await interaction.response.send_message(f"An error occurred while removing the roles: {e}", ephemeral=True)
-        else:
-            await interaction.response.send_message("You are not in any impromptu notification groups.", ephemeral=True)
 
 class ImpromptuSelector(commands.Cog):
     def __init__(self, bot):

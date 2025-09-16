@@ -120,6 +120,7 @@ def create_event_post():
         all_discord_mentions = []
 
         if posted_positions_data:
+            posted_positions_data.sort(key=lambda x: x.get("finalPosition", x.get("requestedPosition", "")))
             for pos_item in posted_positions_data:
 
                 if not pos_item.get("published", False):

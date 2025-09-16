@@ -47,20 +47,37 @@ class RoleSelectionButtons(discord.ui.View):
 
     @discord.ui.button(label="Impromptu Ground", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_gnd")
     async def impromptu_gnd_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Impromptu Ground", IMPROMPTU_ROLE_MAP["impromptu_gnd"])
+        await self.remove_existing_roles(interaction, IMPROMPTU_ROLE_MAP["impromptu_gnd"])
+        await self.assign_or_remove_role(interaction, "Delivery/Ground", IMPROMPTU_ROLE_MAP["impromptu_gnd"])
 
     @discord.ui.button(label="Impromptu Tower", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_twr")
     async def impromptu_twr_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Impromptu Tower", IMPROMPTU_ROLE_MAP["impromptu_twr"])
+        await self.remove_existing_roles(interaction, IMPROMPTU_ROLE_MAP["impromptu_twr"])
+        await self.assign_or_remove_role(interaction, "Tower", IMPROMPTU_ROLE_MAP["impromptu_twr"])
 
     @discord.ui.button(label="Impromptu Approach", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_app")
     async def impromptu_app_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Impromptu Approach", IMPROMPTU_ROLE_MAP["impromptu_app"])
+        await self.remove_existing_roles(interaction, IMPROMPTU_ROLE_MAP["impromptu_app"])
+        await self.assign_or_remove_role(interaction, "Approach", IMPROMPTU_ROLE_MAP["impromptu_app"])
 
     @discord.ui.button(label="Impromptu Center", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_ctr")
     async def impromptu_ctr_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Impromptu Center", IMPROMPTU_ROLE_MAP["impromptu_ctr"])
+        await self.remove_existing_roles(interaction, IMPROMPTU_ROLE_MAP["impromptu_ctr"])
+        await self.assign_or_remove_role(interaction, "Center", IMPROMPTU_ROLE_MAP["impromptu_ctr"])
 
+    async def remove_existing_roles(self, interaction: discord.Interaction, exclude_role_id):
+        member = interaction.user
+        roles_to_remove = [interaction.guild.get_role(rid) for rid in IMPROMPTU_ROLE_MAP.values() if interaction.guild.get_role(rid) in member.roles and rid != exclude_role_id]
+        if roles_to_remove:
+            try:
+                await member.remove_roles(*roles_to_remove)
+                await interaction.response.send_message("You have **left** all impromptu notification groups.", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.response.send_message("I don't have permissions to remove those roles. Please check my permissions.", ephemeral=True)
+            except Exception as e:
+                await interaction.response.send_message(f"An error occurred while removing the roles: {e}", ephemeral=True)
+        else:
+            await interaction.response.send_message("You are not in any impromptu notification groups.", ephemeral=True)
 
 class ImpromptuSelector(commands.Cog):
     def __init__(self, bot):
@@ -112,13 +129,14 @@ class ImpromptuSelector(commands.Cog):
         embed = discord.Embed(
             title="Impromptu Selector",
             description=(
-                "Click the buttons below to **opt in or out** of receiving notifications\n "
+                "As a perk of being a ZDC home controller, you may join a role that our training staff can use to alert you of an available impromptu session.  These sessions will usually be the same day.  Keep reading for instructions on how to do this.\n"
+                "This will add you to a role that the training staff can ping in this channel.  If you get an alert that there is an open session, you may PM the instructor who posted.  These sessions are first come – first serve.  The instructor will delete the message or react to it to indicate it has been taken.\n\n"
+                "Click the buttons below to **opt in or out** of receiving notifications for **the training that you are seeking**\n "
                 "• If you have the role, clicking the button will **remove** it.\n"
                 "• If you don't have the role, clicking the button will **add** it."
             ),
             color=discord.Color.gold()
         )
-        embed.set_footer(text="Your role preferences determine which break requests you see.")
 
         view = RoleSelectionButtons(self.bot)
         message = await channel.send(embed=embed, view=view)

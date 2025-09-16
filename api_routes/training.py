@@ -28,7 +28,7 @@ def save_training_channels(data):
 
 
 @bp.route("/create_training_channel", methods=["POST"])
-async def create_training_channel():
+def create_training_channel():
     app = current_app
     auth_header = request.headers.get("X-API-Key")
     if not auth_header or auth_header != app.secret_key:
@@ -138,8 +138,8 @@ async def create_training_channel():
             )
         )
 
-        await new_channel.edit(sync_permissions=True)
-        await new_channel.edit(overwrites=overwrites)
+        new_channel.edit(sync_permissions=True)
+        new_channel.edit(overwrites=overwrites)
 
         print(f"Created training channel '{new_channel.name}' (ID: {new_channel.id})")
 

@@ -37,8 +37,14 @@ class BreakRequestActions(discord.ui.View):
         if requesting_user:
             await interaction.channel.send(
                 f"🚨 {reliever_user.mention} has claimed the break for {requesting_user.mention}! "
-                "Please coordinate directly."
+                "Please coordinate directly.",
+                view=NotificationDeleteView(reliever_user.id)
             )
+
+            try:
+                await interaction.message.delete()
+            except Exception as e:
+                print(f"Error deleting break request message after claim: {e}")
         else:
             await interaction.channel.send(
                 f"🚨 {reliever_user.mention} has claimed this break! The original requester is no longer in the server."
@@ -46,10 +52,7 @@ class BreakRequestActions(discord.ui.View):
 
         for item in self.children:
             item.disabled = True
-        await interaction.message.edit(view=self)
-
-        await interaction.followup.send(f"You have successfully claimed this break. The requester has been notified.",
-                                        ephemeral=True)
+        # await interaction.message.edit(view=self)
 
     @discord.ui.button(label="Done / Delete", style=discord.ButtonStyle.danger, custom_id="delete_break_request")
     async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button  ):
@@ -250,12 +253,6 @@ class BreakBoard(commands.Cog):
             sent_message = await notification_channel.send(message_to_send, view=dynamic_view)
             dynamic_view.message = sent_message
 
-            await interaction.followup.send(
-                f"Notification sent for {role_name}! You indicated you can wait {wait_time}. "
-                "This message will be deleted automatically if claimed/resolved. "
-                "You or the relieving controller can click 'Done / Delete' to remove it.",
-                ephemeral=True
-            )
         except Exception as e:
             await interaction.followup.send(f"Failed to send notification: {e}", ephemeral=True)
             print(f"Failed to send notification for {role_name} (Role ID: {role_id}): {e}")
@@ -265,9 +262,8 @@ class BreakBoard(commands.Cog):
             title="Controller Break Notification System",
             description=(
                 "Use the buttons below to request a break for specific positions.\n"
-                "- Once your request is picked up by another controller, or if it's no longer needed, "
-                "**please delete the notification message** to keep this channel clear.\n "
                 "- The message will include a 'Claim' and 'Done / Delete' button."
+                "- Press the 'Complete' button to delete the message when the shift change is complete."
             ),
             color=discord.Color.blue()
         )
@@ -280,3 +276,24 @@ class BreakBoard(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(BreakBoard(bot))
+
+class NotificationDeleteView(discord.ui.View):
+    def __init__(self, allowed_user_id: int):
+        super().__init__(timeout=300)
+        self.allowed_user_id = allowed_user_id
+
+    @discord.ui.button(label="Complete", style=discord.ButtonStyle.success, custom_id="delete_notification")
+    async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        can_delete = (
+                interaction.user.id == self.allowed_user_id or
+                interaction.user.guild_permissions.manage_messages
+        )
+        if not can_delete:
+            await interaction.response.send_message("You are not authorized to delete this message.", ephemeral=True)
+            return
+        try:
+            await interaction.message.delete()
+        except discord.Forbidden:
+            await interaction.response.send_message("I don't have permission to delete this message.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"Failed to delete message: {e}", ephemeral=True)

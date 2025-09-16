@@ -6,7 +6,7 @@ import traceback
 import os
 import json
 
-bp = Blueprint("training_api", __name__, url_prefix="/training")
+bp = Blueprint("training_api", __name__)
 
 TRAINING_CHANNELS_FILE = f"{os.getcwd()}/data/training_channels.json"
 

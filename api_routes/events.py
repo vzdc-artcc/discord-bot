@@ -45,6 +45,7 @@ def get_banner_url(banner_key: str) -> str:
 
 
 @bp.route("/create_event_post", methods=["POST"])
+
 def create_event_post():
     app = current_app
     auth_header = request.headers.get("X-API-Key")

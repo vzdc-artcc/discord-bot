@@ -97,10 +97,8 @@ def create_training_channel():
         if not category or not isinstance(category, discord.CategoryChannel):
             return jsonify({"error": "Training category not found"}), 404
 
-        # Build permission overwrites
-        overwrites = {
-            category.guild.default_role: discord.PermissionOverwrite(view_channel=False)
-        }
+        overwrites = dict(category.overwrites)
+        overwrites[category.guild.default_role] = discord.PermissionOverwrite(view_channel=False)
 
         mention_ids = []
 

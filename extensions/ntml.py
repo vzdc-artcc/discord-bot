@@ -9,6 +9,7 @@ class NTMLListener(commands.Cog):
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.channel.id == NTML_CHANNEL_ID and not message.author.bot:
+            print("message received in NTML channel")
             print(message.content)
             # async with aiohttp.ClientSession() as session:
             #     await session.post(EXTERNAL_URL, json=data)

@@ -135,6 +135,8 @@ IMAGE_BASE_URL = os.getenv("IMAGE_BASE_URL")
 
 NTML_CHANNEL_ID = int(os.getenv("NTML_CHANNEL_ID"))
 
+STAFF_ROLE_ID = int(os.getenv("STAFF_ROLE_ID"))
+
 # Rating Maps
 atc_rating = {
     -1: 'INA', 0: 'SUS', 1: 'OBS', 2: 'S1', 3: 'S2', 4: 'S3', 5: 'C1', 6: 'C2', 7: 'C3',

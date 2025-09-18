@@ -1,7 +1,7 @@
 import discord
 from flask import Blueprint, request, jsonify
 from flask import current_app
-from config import TRAINING_CATEGORY_ID
+from config import TRAINING_CATEGORY_ID, STAFF_ROLE_ID
 import traceback
 import os
 import json
@@ -138,7 +138,15 @@ def create_training_channel():
             )
         )
 
-        # new_channel.edit(sync_permissions=True)
+        staff_role = category.guild.get_role(STAFF_ROLE_ID)
+
+        # add to your overwrites dict
+        overwrites[staff_role] = discord.PermissionOverwrite(
+            view_channel=True,
+            manage_channels=True,   # can edit channel settings
+            manage_messages=True    # optional: can moderate messages
+        )
+
         new_channel.edit(overwrites=overwrites)
 
         print(f"Created training channel '{new_channel.name}' (ID: {new_channel.id})")

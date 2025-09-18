@@ -5,6 +5,8 @@ from config import DISCORD_TOKEN
 import asyncio
 import os
 
+from extensions.ntml import NTMLListener
+
 intents = discord.Intents.all()
 intents.message_content = True
 intents.members = True

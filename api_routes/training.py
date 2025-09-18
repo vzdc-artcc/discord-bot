@@ -138,7 +138,7 @@ def create_training_channel():
             )
         )
 
-        new_channel.edit(sync_permissions=True)
+        # new_channel.edit(sync_permissions=True)
         new_channel.edit(overwrites=overwrites)
 
         print(f"Created training channel '{new_channel.name}' (ID: {new_channel.id})")

@@ -4,8 +4,8 @@ from config import NTML_CHANNEL_ID
 
 class NTMLListener(commands.Cog):
     def __init__(self, bot):
-        super().__init__(timeout=None)
         self.bot = bot
+
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -13,3 +13,6 @@ class NTMLListener(commands.Cog):
             print(message.content)
             # async with aiohttp.ClientSession() as session:
             #     await session.post(EXTERNAL_URL, json=data)
+
+async def setup(bot):
+    await bot.add_cog(NTMLListener(bot))

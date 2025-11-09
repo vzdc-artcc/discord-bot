@@ -47,7 +47,7 @@ async def load_extensions():
             try:
                 await bot.load_extension(f"extensions.{extension_name}")
                 logger.info(f"Loaded extension: {extension_name}")
-            except ExtensionLoadError as e:
+            except Exception as e:
                 logger.error(f"An unexpected error occurred while loading extension "
                              f"'{extension_name}': {e}", exc_info=True)
 

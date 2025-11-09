@@ -10,7 +10,6 @@ import logging.handlers
 from config import DISCORD_TOKEN
 from discord.ext import commands
 
-from errors.discord import ExtensionLoadError
 
 intents = discord.Intents.all()
 intents.messages = True

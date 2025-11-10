@@ -195,11 +195,29 @@ class Staffup(commands.Cog):
                                 embed.add_field(name="Frequency", value=online_ctrl_data['vatsimData']['primaryFrequency'], inline=True)
                                 embed.add_field(name="Logon Time", value=f"<t:{int(online_ctrl_data['login_time_utc'].timestamp())}:t>", inline=True)
 
-                                for controller in online_ctrl_data:
-                                    if controller['positions']['facilityId'] == online_ctrl_data['primaryPositionId']:
-                                        continue
-                                    else:
-                                        embed.add_field(name="Additional Position", value=f"{controller['positions']['facilityName']} - {controller['positions']['frequency']}", inline=True)
+                                for pos in online_ctrl_data.get('positions', []):
+                                    try:
+                                        # Skip positions that belong to the primary facility (not an "additional" position)
+                                        if pos.get('facilityId') == online_ctrl_data.get('primaryFacilityId'):
+                                            continue
+
+                                        # Only include positions that are active
+                                        if not pos.get('isActive', False):
+                                            continue
+
+                                        # Format frequency (feed gives frequency as integer in Hz in many cases)
+                                        freq = pos.get('frequency')
+                                        if isinstance(freq, (int, float)):
+                                            freq_str = f"{freq/1e6:.3f} MHz"
+                                        else:
+                                            freq_str = str(freq) if freq is not None else "N/A"
+
+                                        # Prefer a friendly label for the position
+                                        label = pos.get('positionName') or pos.get('defaultCallsign') or pos.get('radioName') or pos.get('positionId')
+
+                                        embed.add_field(name="Additional Position", value=f"{pos.get('facilityName')} - {label} ({freq_str})", inline=True)
+                                    except Exception as e:
+                                        logger.exception("Error processing additional position for %s: %s", online_ctrl_data['vatsimData'].get('callsign'), e)
 
                                 embed.set_footer(text="vZDC Controller Status")
 

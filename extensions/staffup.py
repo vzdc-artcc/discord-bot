@@ -11,6 +11,7 @@ from config import STAFFUP_CHANNEL
 from utils.vatsim import parse_vatsim_logon_time
 
 online_zdc_controllers: list = []
+staffup_channel = STAFFUP_CHANNEL
 
 class Staffup(commands.Cog):
     """Staffup related commands."""

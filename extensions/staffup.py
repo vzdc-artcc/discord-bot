@@ -140,7 +140,7 @@ class Staffup(commands.Cog):
                                 )
                                 embed.add_field(name="Name", value=f"{offline_ctrl_data['vatsimData']['realName']} ({offline_ctrl_data['vatsimData']['userRating']})",
                                                 inline=True)
-                                embed.add_field(name="Frequency", value=offline_ctrl_data['vatsimData']['primaryFrequency'], inline=True)
+                                embed.add_field(name="Frequency", value=f"{offline_ctrl_data['vatsimData']['primaryFrequency']/1e6:.3f}", inline=True)
 
                                 if login_time_dt:
                                     embed.add_field(name="Logon Time", value=f"<t:{int(login_time_dt.timestamp())}:t>",
@@ -167,8 +167,6 @@ class Staffup(commands.Cog):
                             online_ctrl_data = next((c for c in current_vatsim_controllers if c['vatsimData']['cid'] == cid), None)
 
                             if online_ctrl_data:
-                                # Prefer the data-feed provided login time (camelCase 'loginTime')
-                                # Fall back to older keys like 'logon_time' or 'logonTime' for compatibility.
                                 logon_time_str = None
                                 for key in ("loginTime", "logon_time", "logonTime"):
                                     val = online_ctrl_data.get(key)
@@ -184,7 +182,6 @@ class Staffup(commands.Cog):
                                             f"Could not parse VATSIM login time '{logon_time_str}' for CID {cid}. Using current UTC.")
                                         online_ctrl_data['login_time_utc'] = datetime.now(timezone.utc)
                                 else:
-                                    # No login time provided by feed; use current UTC
                                     online_ctrl_data['login_time_utc'] = datetime.now(timezone.utc)
 
                                 embed = Embed(
@@ -192,12 +189,11 @@ class Staffup(commands.Cog):
                                     color=discord.Color.green()
                                 )
                                 embed.add_field(name="Name", value=f"{online_ctrl_data['vatsimData']['realName']} ({online_ctrl_data['vatsimData']['userRating']})")
-                                embed.add_field(name="Frequency", value=online_ctrl_data['vatsimData']['primaryFrequency'], inline=True)
+                                embed.add_field(name="Frequency", value=f"{online_ctrl_data['vatsimData']['primaryFrequency']/1e6:.3f}", inline=True)
                                 embed.add_field(name="Logon Time", value=f"<t:{int(online_ctrl_data['login_time_utc'].timestamp())}:t>", inline=True)
 
                                 for pos in online_ctrl_data.get('positions', []):
                                     try:
-                                        # Skip positions that belong to the primary facility (not an "additional" position)
                                         if pos.get('facilityId') == online_ctrl_data.get('primaryFacilityId'):
                                             continue
 
@@ -208,11 +204,10 @@ class Staffup(commands.Cog):
                                         # Format frequency (feed gives frequency as integer in Hz in many cases)
                                         freq = pos.get('frequency')
                                         if isinstance(freq, (int, float)):
-                                            freq_str = f"{freq/1e6:.3f} MHz"
+                                            freq_str = f"{freq/1e6:.3f}"
                                         else:
                                             freq_str = str(freq) if freq is not None else "N/A"
 
-                                        # Prefer a friendly label for the position
                                         label = pos.get('positionName') or pos.get('defaultCallsign') or pos.get('radioName') or pos.get('positionId')
 
                                         embed.add_field(name="Additional Position", value=f"{pos.get('facilityName')} - {label} ({freq_str})", inline=True)

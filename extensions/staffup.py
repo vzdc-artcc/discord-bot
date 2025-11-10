@@ -76,7 +76,7 @@ class Staffup(commands.Cog):
                         current_vatsim_controllers = []
 
                         for controller in all_controllers:
-                            if controller["artccId"] == "ZDC":
+                            if controller["artccId"] == "ZDC" and not controller['isObserver']:
                                 current_vatsim_controllers.append(controller)
 
                         current_online_cids = {ctrl['vatsimData']['cid'] for ctrl in online_ref}
@@ -87,7 +87,7 @@ class Staffup(commands.Cog):
                         for cid in went_offline_cids:
                             offline_ctrl_data = next((c for c in online_ref if c['vatsimData']['cid'] == cid), None)
 
-                            if offline_ctrl_data and offline_ctrl_data['frequency'] != "199.998":
+                            if offline_ctrl_data and offline_ctrl_data['isActive']:
                                 now_utc = datetime.now(timezone.utc)
                                 login_time = offline_ctrl_data.get('login_time_utc')
 
@@ -99,8 +99,8 @@ class Staffup(commands.Cog):
                                         try:
                                             login_time_dt = parse_vatsim_logon_time(login_time)
                                         except Exception as parse_e:
-                                            print(
-                                                f"Error parsing stored login_time string for {offline_ctrl_data['callsign']}: {parse_e}")
+                                            logger.info(
+                                                f"Error parsing stored login_time string for {offline_ctrl_data['vatsimData']['callsign']}: {parse_e}")
                                             login_time_dt = None
                                     elif isinstance(login_time, datetime):
 
@@ -109,8 +109,8 @@ class Staffup(commands.Cog):
                                         else:
                                             login_time_dt = login_time
                                     else:
-                                        print(
-                                            f"Unexpected type for login_time_utc for {offline_ctrl_data['callsign']}: {type(login_time)}")
+                                        logger.info(
+                                            f"Unexpected type for login_time_utc for {offline_ctrl_data['vatsimData']['callsign']}: {type(login_time)}")
                                 if login_time_dt:
                                     try:
                                         duration = now_utc - login_time_dt
@@ -131,16 +131,16 @@ class Staffup(commands.Cog):
                                         duration_str = " ".join(duration_parts) if duration_parts else "0s"
 
                                     except Exception as dt_e:
-                                        print(f"Error calculating duration for {offline_ctrl_data['callsign']}: {dt_e}")
+                                        print(f"Error calculating duration for {offline_ctrl_data['vatsimData']['callsign']}: {dt_e}")
                                         duration_str = "Error"
 
                                 embed = Embed(
-                                    title=f"{offline_ctrl_data['callsign']} - Offline",
+                                    title=f"{offline_ctrl_data['vatsimData']['callsign']} - Offline",
                                     color=discord.Color.red()
                                 )
                                 embed.add_field(name="Name", value=f"{offline_ctrl_data['vatsimData']['realName']} ({offline_ctrl_data['vatsimData']['userRating']})",
                                                 inline=True)
-                                embed.add_field(name="Frequency", value=offline_ctrl_data['vatsimData']['primary.Frequency'], inline=True)
+                                embed.add_field(name="Frequency", value=offline_ctrl_data['vatsimData']['primaryFrequency'], inline=True)
 
                                 if login_time_dt:
                                     embed.add_field(name="Logon Time", value=f"<t:{int(login_time_dt.timestamp())}:t>",
@@ -154,12 +154,12 @@ class Staffup(commands.Cog):
                                 embed.set_footer(text="vZDC Controller Status")
                                 try:
                                     await staffup_channel.send(embed=embed)
-                                    logger.info(f"Sent offline message for: {offline_ctrl_data['callsign']}")
+                                    logger.info(f"Sent offline message for: {offline_ctrl_data['vatsimData']['callsign']}")
                                 except Exception as e:
                                     logger.exception("Failed to send staffup offline embed: %s", e)
 
                                 # remove from our instance list
-                                online_ref = [c for c in online_ref if c['cid'] != cid]
+                                online_ref = [c for c in online_ref if c['vatsimData']['cid'] != cid]
                                 self.online_zdc_controllers = online_ref
                         came_online_cids = vatsim_online_cids - current_online_cids
 
@@ -167,35 +167,56 @@ class Staffup(commands.Cog):
                             online_ctrl_data = next((c for c in current_vatsim_controllers if c['vatsimData']['cid'] == cid), None)
 
                             if online_ctrl_data:
-                                logon_time_str = online_ctrl_data.get('logon_time')
+                                # Prefer the data-feed provided login time (camelCase 'loginTime')
+                                # Fall back to older keys like 'logon_time' or 'logonTime' for compatibility.
+                                logon_time_str = None
+                                for key in ("loginTime", "logon_time", "logonTime"):
+                                    val = online_ctrl_data.get(key)
+                                    if val:
+                                        logon_time_str = val
+                                        break
+
                                 if logon_time_str:
                                     try:
                                         online_ctrl_data['login_time_utc'] = parse_vatsim_logon_time(logon_time_str)
                                     except Exception:
-                                        print(
-                                            f"Could not parse VATSIM logon_time '{logon_time_str}' for CID {cid}. Using current UTC.")
-                                        online_ctrl_data['login_time_utc'] = datetime.now(
-                                            timezone.utc)
+                                        logger.warning(
+                                            f"Could not parse VATSIM login time '{logon_time_str}' for CID {cid}. Using current UTC.")
+                                        online_ctrl_data['login_time_utc'] = datetime.now(timezone.utc)
                                 else:
-                                    online_ctrl_data['login_time_utc'] = datetime.now(
-                                        timezone.utc)
+                                    # No login time provided by feed; use current UTC
+                                    online_ctrl_data['login_time_utc'] = datetime.now(timezone.utc)
 
                                 embed = Embed(
                                     title=f"{online_ctrl_data['vatsimData']['callsign']} - Online",
                                     color=discord.Color.green()
                                 )
+                                embed.add_field(name="Name", value=f"{online_ctrl_data['vatsimData']['realName']} ({online_ctrl_data['vatsimData']['userRating']})")
+                                embed.add_field(name="Frequency", value=online_ctrl_data['vatsimData']['primaryFrequency'], inline=True)
+                                embed.add_field(name="Logon Time", value=f"<t:{int(online_ctrl_data['login_time_utc'].timestamp())}:t>", inline=True)
+
+                                for controller in online_ctrl_data:
+                                    if controller['positions']['facilityId'] == online_ctrl_data['primaryPositionId']:
+                                        continue
+                                    else:
+                                        embed.add_field(name="Additional Position", value=f"{controller['positions']['facilityName']} - {controller['positions']['frequency']}", inline=True)
+
+                                embed.set_footer(text="vZDC Controller Status")
+
+                                await staffup_channel.send(embed=embed)
+                                logger.info(f"Sent online message for: {online_ctrl_data['vatsimData']['callsign']}")
 
                                 online_ref.append(online_ctrl_data)
                                 self.online_zdc_controllers = online_ref
 
                     else:
-                        print(f"Could not fetch VATSIM Data. HTTP Status: {response.status}")
+                        logger.info(f"Could not fetch VATSIM Data. HTTP Status: {response.status}")
         except aiohttp.ClientError as e:
-            print(f"Aiohttp client error occurred during VATSIM data fetch: {e}")
+            logger.info(f"Aiohttp client error occurred during VATSIM data fetch: {e}")
         except asyncio.TimeoutError:
-            print("VATSIM data fetch timed out.")
+            logger.info("VATSIM data fetch timed out.")
         except Exception as e:
-            print(f"An unexpected error occurred in check_online_controllers: {e}")
+            logger.info(f"An unexpected error occurred in check_online_controllers: {e}")
             traceback.print_exc()
 
 

@@ -11,41 +11,61 @@ from config import STAFFUP_CHANNEL
 from utils.vatsim import parse_vatsim_logon_time
 
 online_zdc_controllers: list = []
-staffup_channel = STAFFUP_CHANNEL
 
 class Staffup(commands.Cog):
     """Staffup related commands."""
 
     def __init__(self, bot):
         self.bot = bot
+        # instance storage for online controllers
+        self.online_zdc_controllers: list = []
+        # configured channel id (from config.STAFFUP_CHANNEL)
+        self.staffup_channel_id = STAFFUP_CHANNEL
         logger.info("Staffup extension initialized.")
 
-        @commands.Cog.listener()
-        async def on_ready(self):
-            logger.info("Staffup extension on_ready fired.")
-            if not self.check_online_controllers.is_running():
-                logger.info("Starting check_online_controllers task loop.")
-                self.check_online_controllers.start()
-            else:
-                logger.info("check_online_controllers task loop is already running.")
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Start the background loop when the bot is ready."""
+        logger.info("Staffup extension on_ready fired.")
+        if not self.check_online_controllers.is_running():
+            logger.info("Starting check_online_controllers task loop.")
+            self.check_online_controllers.start()
+        else:
+            logger.info("check_online_controllers task loop is already running.")
 
-            def cog_unload(self):
-                logger.info("Staffup cog unloaded. Stopping check_online_controllers task loop.")
-                self.check_online_controllers.cancel()
-
+    def cog_unload(self):
+        logger.info("Staffup cog unloaded. Stopping check_online_controllers task loop.")
+        try:
+            self.check_online_controllers.cancel()
+        except Exception:
+            pass
 
     @tasks.loop(seconds=15.0)
     async def check_online_controllers(self):
         """Check for online controllers and update Staffup accordingly."""
         logger.info("Checking online controllers for Staffup update...")
-        global online_zdc_controllers
+        # use instance list
+        online_ref = self.online_zdc_controllers
 
         try:
             await self.bot.wait_until_ready()
 
-            staffup_channel_id = self.bot.config.get("STAFFUP_CHANNEL")
-            if not staffup_channel_id:
-                logger.warning("STAFFUP_CHANNEL not configured. Skipping Staffup update.")
+            # Resolve configured channel ID to a channel object
+            staffup_channel = None
+            try:
+                if self.staffup_channel_id:
+                    staffup_channel = self.bot.get_channel(self.staffup_channel_id)
+                    if staffup_channel is None:
+                        # attempt API fetch as fallback
+                        try:
+                            staffup_channel = await self.bot.fetch_channel(self.staffup_channel_id)
+                        except Exception:
+                            staffup_channel = None
+            except Exception:
+                staffup_channel = None
+
+            if staffup_channel is None:
+                logger.warning("STAFFUP_CHANNEL not found or not configured. Skipping Staffup update.")
                 return
 
             async with aiohttp.ClientSession() as session:
@@ -59,13 +79,13 @@ class Staffup(commands.Cog):
                             if controller["artccId"] == "ZDC":
                                 current_vatsim_controllers.append(controller)
 
-                        current_online_cids = {ctrl['cid'] for ctrl in online_zdc_controllers}
-                        vatsim_online_cids = {ctrl['cid'] for ctrl in current_vatsim_controllers}
+                        current_online_cids = {ctrl['vatsimData']['cid'] for ctrl in online_ref}
+                        vatsim_online_cids = {ctrl['vatsimData']['cid'] for ctrl in current_vatsim_controllers}
 
                         went_offline_cids = current_online_cids - vatsim_online_cids
 
                         for cid in went_offline_cids:
-                            offline_ctrl_data = next((c for c in online_zdc_controllers if c['cid'] == cid), None)
+                            offline_ctrl_data = next((c for c in online_ref if c['vatsimData']['cid'] == cid), None)
 
                             if offline_ctrl_data and offline_ctrl_data['frequency'] != "199.998":
                                 now_utc = datetime.now(timezone.utc)
@@ -132,16 +152,21 @@ class Staffup(commands.Cog):
                                     embed.add_field(name="Session Info", value="Time data unavailable", inline=False)
 
                                 embed.set_footer(text="vZDC Controller Status")
-                                await staffup_channel.send(embed=embed)
-                                print(f"Sent offline message for: {offline_ctrl_data['callsign']}")
+                                try:
+                                    await staffup_channel.send(embed=embed)
+                                    logger.info(f"Sent offline message for: {offline_ctrl_data['callsign']}")
+                                except Exception as e:
+                                    logger.exception("Failed to send staffup offline embed: %s", e)
 
-                                online_zdc_controllers = [c for c in online_zdc_controllers if c['cid'] != cid]
+                                # remove from our instance list
+                                online_ref = [c for c in online_ref if c['cid'] != cid]
+                                self.online_zdc_controllers = online_ref
                         came_online_cids = vatsim_online_cids - current_online_cids
 
                         for cid in came_online_cids:
-                            online_ctrl_data = next((c for c in current_vatsim_controllers if c['cid'] == cid), None)
+                            online_ctrl_data = next((c for c in current_vatsim_controllers if c['vatsimData']['cid'] == cid), None)
 
-                            if online_ctrl_data and online_ctrl_data['frequency'] != "199.998":
+                            if online_ctrl_data:
                                 logon_time_str = online_ctrl_data.get('logon_time')
                                 if logon_time_str:
                                     try:
@@ -156,11 +181,12 @@ class Staffup(commands.Cog):
                                         timezone.utc)
 
                                 embed = Embed(
-                                    title=f"{online_ctrl_data['callsign']} - Online",
+                                    title=f"{online_ctrl_data['vatsimData']['callsign']} - Online",
                                     color=discord.Color.green()
                                 )
 
-                                online_zdc_controllers.append(online_ctrl_data)
+                                online_ref.append(online_ctrl_data)
+                                self.online_zdc_controllers = online_ref
 
                     else:
                         print(f"Could not fetch VATSIM Data. HTTP Status: {response.status}")
@@ -175,11 +201,3 @@ class Staffup(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Staffup(bot))
-
-
-
-
-
-
-
-

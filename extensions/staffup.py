@@ -12,6 +12,40 @@ from utils.vatsim import parse_vatsim_logon_time
 
 online_zdc_controllers: list = []
 
+
+def is_controller_active(controller: dict) -> bool:
+    """Return True if the given controller entry represents an active connection.
+
+    The data feed can represent activity in different places depending on version:
+    - top-level `isActive`
+    - `vatsimData.isActive`
+    - any entry in `connections` with `isActive` True
+    - any `positions` entry with `isActive` True
+    """
+    try:
+        if controller.get("isActive"):
+            return True
+
+        vatsim = controller.get("vatsimData") or {}
+        if vatsim.get("isActive"):
+            return True
+
+        for conn in controller.get("connections", []):
+            if conn and conn.get("isActive"):
+                return True
+
+        for pos in controller.get("positions", []):
+            if pos and pos.get("isActive"):
+                return True
+
+    except Exception:
+        # If anything unexpected occurs, err on the side of not treating the
+        # controller as active to avoid false-positives.
+        return False
+
+    return False
+
+
 class Staffup(commands.Cog):
     """Staffup related commands."""
 
@@ -38,9 +72,9 @@ class Staffup(commands.Cog):
         try:
             self.check_online_controllers.cancel()
         except Exception:
-            pass
+            logger.exception("Error occurred while stopping check_online_controllers task loop.")
 
-    @tasks.loop(seconds=15.0)
+    @tasks.loop(seconds=10.0)
     async def check_online_controllers(self):
         """Check for online controllers and update Staffup accordingly."""
         logger.info("Checking online controllers for Staffup update...")
@@ -76,7 +110,14 @@ class Staffup(commands.Cog):
                         current_vatsim_controllers = []
 
                         for controller in all_controllers:
-                            if controller["artccId"] == "ZDC" and not controller['isObserver']:
+                            # Only include ZDC controllers that are not observers AND are actually active
+                            if controller.get("artccId") == "ZDC" and not controller.get('isObserver', False):
+                                if not is_controller_active(controller):
+                                    # skip controllers that aren't active according to the feed
+                                    continue
+                                # normalize an 'isActive' flag on the controller dict for later checks
+                                if not controller.get('isActive'):
+                                    controller['isActive'] = True
                                 current_vatsim_controllers.append(controller)
 
                         current_online_cids = {ctrl['vatsimData']['cid'] for ctrl in online_ref}
@@ -87,7 +128,7 @@ class Staffup(commands.Cog):
                         for cid in went_offline_cids:
                             offline_ctrl_data = next((c for c in online_ref if c['vatsimData']['cid'] == cid), None)
 
-                            if offline_ctrl_data and offline_ctrl_data['isActive']:
+                            if offline_ctrl_data and offline_ctrl_data.get('isActive', False):
                                 now_utc = datetime.now(timezone.utc)
                                 login_time = offline_ctrl_data.get('login_time_utc')
 
@@ -99,7 +140,7 @@ class Staffup(commands.Cog):
                                         try:
                                             login_time_dt = parse_vatsim_logon_time(login_time)
                                         except Exception as parse_e:
-                                            logger.info(
+                                            logger.exception(
                                                 f"Error parsing stored login_time string for {offline_ctrl_data['vatsimData']['callsign']}: {parse_e}")
                                             login_time_dt = None
                                     elif isinstance(login_time, datetime):
@@ -109,7 +150,7 @@ class Staffup(commands.Cog):
                                         else:
                                             login_time_dt = login_time
                                     else:
-                                        logger.info(
+                                        logger.warning(
                                             f"Unexpected type for login_time_utc for {offline_ctrl_data['vatsimData']['callsign']}: {type(login_time)}")
                                 if login_time_dt:
                                     try:
@@ -131,7 +172,7 @@ class Staffup(commands.Cog):
                                         duration_str = " ".join(duration_parts) if duration_parts else "0s"
 
                                     except Exception as dt_e:
-                                        print(f"Error calculating duration for {offline_ctrl_data['vatsimData']['callsign']}: {dt_e}")
+                                        logger.exception(f"Error calculating duration for {offline_ctrl_data['vatsimData']['callsign']}: {dt_e}")
                                         duration_str = "Error"
 
                                 embed = Embed(
@@ -219,17 +260,19 @@ class Staffup(commands.Cog):
                                 await staffup_channel.send(embed=embed)
                                 logger.info(f"Sent online message for: {online_ctrl_data['vatsimData']['callsign']}")
 
+                                # ensure the stored entry reflects active status
+                                online_ctrl_data['isActive'] = True
                                 online_ref.append(online_ctrl_data)
                                 self.online_zdc_controllers = online_ref
 
                     else:
-                        logger.info(f"Could not fetch VATSIM Data. HTTP Status: {response.status}")
+                        logger.warning(f"Could not fetch VATSIM Data. HTTP Status: {response.status}")
         except aiohttp.ClientError as e:
-            logger.info(f"Aiohttp client error occurred during VATSIM data fetch: {e}")
+            logger.exception(f"Aiohttp client error occurred during VATSIM data fetch: {e}")
         except asyncio.TimeoutError:
-            logger.info("VATSIM data fetch timed out.")
+            logger.exception("VATSIM data fetch timed out.")
         except Exception as e:
-            logger.info(f"An unexpected error occurred in check_online_controllers: {e}")
+            logger.exception(f"An unexpected error occurred in check_online_controllers: {e}")
             traceback.print_exc()
 
 

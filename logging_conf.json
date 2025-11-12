@@ -35,6 +35,22 @@
       "maxBytes": 10000000,
       "backupCount": 3
     },
+    "deleted_file": {
+      "class": "logging.handlers.RotatingFileHandler",
+      "level": "INFO",
+      "formatter": "json",
+      "filename": "logs/deleted_messages.jsonl",
+      "maxBytes": 5000000,
+      "backupCount": 2
+    },
+    "server_events_file": {
+      "class": "logging.handlers.RotatingFileHandler",
+      "level": "INFO",
+      "formatter": "json",
+      "filename": "logs/server_events.jsonl",
+      "maxBytes": 10000000,
+      "backupCount": 5
+    },
     "queue_handler": {
       "class": "logging.handlers.QueueHandler",
       "handlers": [
@@ -50,6 +66,16 @@
       "handlers": [
         "queue_handler"
       ]
+    },
+    "deleted_messages": {
+      "level": "INFO",
+      "handlers": ["deleted_file", "stderr"],
+      "propagate": false
+    },
+    "server_events": {
+      "level": "INFO",
+      "handlers": ["server_events_file", "stderr"],
+      "propagate": false
     }
   }
 }

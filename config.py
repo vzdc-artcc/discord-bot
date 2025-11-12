@@ -11,9 +11,9 @@ VATUSA_API_KEY = os.getenv("VATUSA_API_KEY")
 VATUSA_API_URL = os.getenv("VATUSA_API_URL")
 
 # Channels
-
 STAFFUP_CHANNEL = int(os.getenv("STAFFUP_CHANNEL"))
 BREAK_BOARD_CHANNEL_ID = int(os.getenv("BREAK_BOARD_CHANNEL_ID"))
+IMPROMPTU_CHANNEL_ID= int(os.getenv("IMPROMPTU_CHANNEL_ID"))
 
 # Roles
 
@@ -25,6 +25,10 @@ APP_UNRESTRICTED_ROLE_ID = int(os.getenv("APP_UNRESTRICTED_ROLE_ID"))
 PCT_ROLE_ID = int(os.getenv("PCT_ROLE_ID"))
 CENTER_ROLE_ID = int(os.getenv("CENTER_ROLE_ID"))
 
+IMPROMPTU_CTR_ROLE_ID = int(os.getenv("IMPROMPTU_CTR_ROLE_ID"))
+IMPROMPTU_APP_ROLE_ID = int(os.getenv("IMPROMPTU_APP_ROLE_ID"))
+IMPROMPTU_TWR_ROLE_ID = int(os.getenv("IMPROMPTU_TWR_ROLE_ID"))
+IMPROMPTU_GND_ROLE_ID = int(os.getenv("IMPROMPTU_GND_ROLE_ID"))
 
 # Mapings
 BREAK_BOARD_ROLE_MAP = {
@@ -35,4 +39,11 @@ BREAK_BOARD_ROLE_MAP = {
     "app_unrestricted": APP_UNRESTRICTED_ROLE_ID,
     "pct": PCT_ROLE_ID,
     "center": CENTER_ROLE_ID,
+}
+
+IMPROMPTU_ROLE_MAP = {
+    "impromptu_ctr": IMPROMPTU_CTR_ROLE_ID,
+    "impromptu_app": IMPROMPTU_APP_ROLE_ID,
+    "impromptu_twr": IMPROMPTU_TWR_ROLE_ID,
+    "impromptu_gnd": IMPROMPTU_GND_ROLE_ID,
 }

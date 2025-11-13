@@ -116,10 +116,10 @@ ANNOUNCEMENT_TYPES = {
         "color": discord.Color.magenta().value,
         "title_prefix": "🔔 Event Reminder:"
     },
-    "event-posting": {
+    "event-position-posting": {
         "channel_id": EVENT_ANNOUNCEMENT_CHANNEL_ID,
         "color": discord.Color.dark_blue().value,
-        "title_prefix": "✨ New Event Posting:"
+        "title_prefix": "Event Posting Posting:"
     },
 
 }

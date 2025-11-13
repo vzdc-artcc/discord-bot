@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 import discord
-from typing import Dict, Any, Tuple
+from typing import Dict, Any
 import os
 from datetime import datetime, timezone
 from utils.vatsim import parse_vatsim_logon_time
@@ -70,71 +70,58 @@ def post_regular_event_reminder():
                 # ignore failures to store event (non-critical)
                 pass
 
-    # Build one or more discord.Embed objects that include events as separate fields.
+    # Build one or more embeds (max 25 fields per embed). For each embed chunk we'll create a montage
+    # image out of that chunk's banners and attach it to the message. This preserves the "single embed"
+    # feeling per chunk while still supporting many events.
+    from math import ceil
+    from io import BytesIO
+    import urllib.request
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        Image = ImageDraw = ImageFont = None
+
+    # Local copies for nested helpers and static analysis
     prefix = ANNOUNCEMENT_TYPES.get("event-reminder", {}).get("title_prefix", "Event Reminder:")
     color = ANNOUNCEMENT_TYPES.get("event-reminder", {}).get("color", 0x2F3136)
-
-    # Discord limits: max 25 fields per embed, field name <= 256 chars, field value <= 1024 chars
-    max_fields_per_embed = 25
     max_field_name = 256
     max_field_value = 1024
 
-    # We'll chunk events into multiple embeds each containing up to `max_fields_per_embed` events.
-    embeds = []
-
-    def _make_event_field(ev: Dict[str, Any]) -> Tuple[str, str]:
+    def _make_field_for_event(ev: Dict[str, Any]):
         name = _safe_get(ev, "event_name") or "(Unnamed event)"
         event_id = _safe_get(ev, "event_id") or ""
         desc = _safe_get(ev, "event_description") or "(No description)"
         start = _safe_get(ev, "event_start_time") or ""
         end = _safe_get(ev, "event_end_time") or ""
-        banner = _safe_get(ev, "event_banner_url") or None
         ev_type = _safe_get(ev, "event_type") or ""
         host = _safe_get(ev, "event_host") or ""
         featured = _safe_get(ev, "event_feature_fields") or []
 
-        # Field name: Event name plus times if available
+        # times
         times = ""
-        # Try to parse start/end into datetimes and format as Discord timestamp tags like <t:...:F>
-        start_dt = None
-        end_dt = None
         try:
-            if isinstance(start, str) and start:
-                start_dt = parse_vatsim_logon_time(start)
-            elif isinstance(start, datetime):
-                start_dt = start
-            if isinstance(end, str) and end:
-                end_dt = parse_vatsim_logon_time(end)
-            elif isinstance(end, datetime):
-                end_dt = end
-            # Ensure timezone-aware in UTC for timestamp calculation
-            if start_dt and start_dt.tzinfo is None:
-                start_dt = start_dt.replace(tzinfo=timezone.utc)
-            if end_dt and end_dt.tzinfo is None:
-                end_dt = end_dt.replace(tzinfo=timezone.utc)
+            sdt = parse_vatsim_logon_time(start) if isinstance(start, str) and start else (start if isinstance(start, datetime) else None)
+            edt = parse_vatsim_logon_time(end) if isinstance(end, str) and end else (end if isinstance(end, datetime) else None)
+            if isinstance(sdt, datetime) and sdt.tzinfo is None:
+                sdt = sdt.replace(tzinfo=timezone.utc)
+            if isinstance(edt, datetime) and edt.tzinfo is None:
+                edt = edt.replace(tzinfo=timezone.utc)
+            if sdt and edt:
+                times = f" — <t:{int(sdt.timestamp())}:F> to <t:{int(edt.timestamp())}:F>"
+            elif sdt:
+                times = f" — <t:{int(sdt.timestamp())}:F>"
+            elif edt:
+                times = f" — <t:{int(edt.timestamp())}:F>"
+            else:
+                if start and end:
+                    times = f" — {start} to {end} (UTC)"
+                elif start:
+                    times = f" — starts {start} (UTC)"
         except Exception:
-            # parsing failed; fall back to raw strings
-            start_dt = None
-            end_dt = None
-
-        if start_dt and end_dt:
-            times = f" — <t:{int(start_dt.timestamp())}:F> to <t:{int(end_dt.timestamp())}:F>"
-        elif start_dt:
-            times = f" — <t:{int(start_dt.timestamp())}:F>"
-        elif end_dt:
-            times = f" — <t:{int(end_dt.timestamp())}:F>"
-        else:
-            # fallback to raw ISO strings if parsing failed
-            if start and end:
-                times = f" — {start} to {end} (UTC)"
-            elif start:
-                times = f" — starts {start} (UTC)"
-            elif end:
-                times = f" — ends {end} (UTC)"
+            times = ""
 
         field_name = f"{name}{times}"
 
-        # Field value: description + type/host + featured fields + id
         parts = [desc]
         meta = []
         if ev_type:
@@ -143,82 +130,131 @@ def post_regular_event_reminder():
             meta.append(f"Host: {host}")
         if meta:
             parts.append(" • ".join(meta))
-
-        # Featured fields: expect list of strings
-        if isinstance(featured, list) and all(isinstance(x, str) for x in featured):
-            if featured:
-                parts.append("Featured: " + ", ".join(featured))
-        else:
-            # If it's not a list of strings, ignore it to enforce the new schema
-            pass
-
+        if isinstance(featured, list) and all(isinstance(x, str) for x in featured) and featured:
+            parts.append("Featured: " + ", ".join(featured))
         if event_id:
-            try:
-                event_id_safe = str(event_id).strip()
-                if event_id_safe:
-                    event_url = f"https://vzdc.org/events/{event_id_safe}"
-                    parts.append(f"[Event Page]({event_url})")
-            except Exception:
-                # If anything goes wrong creating the URL, silently skip the link
-                pass
+            parts.append(f"[Event Page](https://vzdc.org/events/{str(event_id).strip()})")
 
-        # Join parts and ensure field value is within Discord limits (1024 chars)
         value = "\n".join(parts)
         if len(value) > (max_field_value - 4):
             value = value[: (max_field_value - 7)] + "..."
 
         return field_name, value
 
-    # Chunk events into embeds
-    total_chunks = (len(events) + max_fields_per_embed - 1) // max_fields_per_embed
-    for chunk_idx in range(total_chunks):
-        chunk_events = events[chunk_idx * max_fields_per_embed: (chunk_idx + 1) * max_fields_per_embed]
-        embed_title = f"{prefix} Weekly Events"
-        if total_chunks > 1:
-            embed_title = f"{embed_title} ({chunk_idx+1}/{total_chunks})"
-        e = discord.Embed(title=embed_title, color=color)
-        e.description = f"Showing {len(chunk_events)} event(s) — total {len(events)} this week."
+    # chunk events and prepare embeds + list of banner URLs per chunk
+    chunk_size = 25
+    chunks = [events[i:i+chunk_size] for i in range(0, len(events), chunk_size)]
+    embeds = []
 
-        # Attach the first available banner URL from this chunk as the embed image (if present)
-        banner_url = None
-        for ev in chunk_events:
-            b = _safe_get(ev, "event_banner_url")
-            if b:
-                banner_url = b
-                break
-        if banner_url:
-            try:
-                e.set_image(url=banner_url)
-            except Exception:
-                # if Discord rejects the URL or something goes wrong, continue without the image
-                banner_url = None
+    # Montage settings
+    thumb_w = 320
+    thumb_h = 180
+    cols = 3
 
-        for ev in chunk_events:
-            fname, fval = _make_event_field(ev)
-            # truncate field name to Discord limits
+    for chunk in chunks:
+        embed = discord.Embed(title=f"{prefix} Weekly Events", color=color)
+        embed.description = f"{len(chunk)} event(s) this message."
+
+        banner_urls = []
+        for ev in chunk:
+            fname, fval = _make_field_for_event(ev)
             if len(fname) > max_field_name:
                 fname = fname[: (max_field_name - 4)] + "..."
-            e.add_field(name=fname, value=fval, inline=False)
+            embed.add_field(name=fname, value=fval, inline=False)
+            b = _safe_get(ev, "event_banner_url")
+            if b:
+                banner_urls.append(b)
 
-        # Build up to 5 link buttons for the first events in this embed chunk
+        # Download banners synchronously and compose a montage image
+        imgs = []
+        for url in banner_urls:
+            try:
+                with urllib.request.urlopen(url, timeout=10) as resp:
+                    data = resp.read()
+                img = Image.open(BytesIO(data)).convert("RGB")
+                imgs.append(img)
+            except Exception:
+                continue
+
+        montage_bytes = None
+        if imgs:
+            # compute grid size
+            count = len(imgs)
+            cols_use = min(cols, count)
+            rows = ceil(count / cols_use)
+            canvas_w = cols_use * thumb_w
+            canvas_h = rows * thumb_h
+            montage = Image.new("RGB", (canvas_w, canvas_h), (40, 40, 40))
+
+            for idx, im in enumerate(imgs):
+                # resize/crop to thumbnail area while preserving aspect
+                im_thumb = im.copy()
+                im_thumb.thumbnail((thumb_w, thumb_h), Image.LANCZOS)
+                # paste centered in slot
+                row = idx // cols_use
+                col = idx % cols_use
+                x = col * thumb_w + (thumb_w - im_thumb.width) // 2
+                y = row * thumb_h + (thumb_h - im_thumb.height) // 2
+                montage.paste(im_thumb, (x, y))
+
+            bio = BytesIO()
+            montage.save(bio, format="PNG")
+            bio.seek(0)
+            montage_bytes = bio.read()
+
+        # If no banners were downloaded to create a montage, produce a small placeholder
+        if montage_bytes is None and Image is not None:
+            try:
+                # single placeholder image sized for one thumbnail slot
+                ph_w = thumb_w * min(cols, 1)
+                ph_h = thumb_h
+                placeholder = Image.new("RGB", (ph_w, ph_h), (40, 40, 40))
+                draw = ImageDraw.Draw(placeholder)
+                msg = "No banners available"
+                try:
+                    # Use a default font if available
+                    font = ImageFont.load_default() if ImageFont is not None else None
+                    text_w, text_h = draw.textsize(msg, font=font)
+                    draw.text(((ph_w - text_w) / 2, (ph_h - text_h) / 2), msg, fill=(200, 200, 200), font=font)
+                except Exception:
+                    try:
+                        draw.text((10, 10), msg, fill=(200, 200, 200))
+                    except Exception:
+                        pass
+                bio = BytesIO()
+                placeholder.save(bio, format="PNG")
+                bio.seek(0)
+                montage_bytes = bio.read()
+            except Exception:
+                montage_bytes = None
+
+        # If still no montage_bytes, fall back to a tiny embedded PNG so the embed has an image.
+        if montage_bytes is None:
+            try:
+                import base64
+                # 1x1 transparent PNG (very small). This guarantees an image attachment even without Pillow.
+                placeholder_png_b64 = (
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAA"
+                    "SUVORK5CYII="
+                )
+                montage_bytes = base64.b64decode(placeholder_png_b64)
+            except Exception:
+                montage_bytes = None
+
+        # Build up to 5 link buttons for this chunk (first 5 events with an id)
         view = None
         try:
             buttons = []
-            for ev in chunk_events[:5]:
+            for ev in chunk[:5]:
                 ev_id = _safe_get(ev, "event_id") or ""
                 if not ev_id:
                     continue
                 label = _safe_get(ev, "event_name") or ev_id
-                # Discord button label limit is 80 characters
                 if len(label) > 80:
                     label = label[:77] + "..."
-                # Use a non-link button with a custom_id so the bot can handle the interaction
-                # custom_id limit is 100 chars; use prefix 'evt:'
-                custom_id = f"evt:{str(ev_id).strip()}"
-                # Use primary style for a call-to-action button
-                btn = discord.ui.Button(style=discord.ButtonStyle.primary, label=label, custom_id=custom_id)  # type: ignore
+                url = f"https://vzdc.org/events/{str(ev_id).strip()}"
+                btn = discord.ui.Button(style=discord.ButtonStyle.link, label=label, url=url)  # type: ignore
                 buttons.append(btn)
-
             if buttons:
                 view = discord.ui.View()
                 for b in buttons:
@@ -226,7 +262,7 @@ def post_regular_event_reminder():
         except Exception:
             view = None
 
-        embeds.append((e, view))
+        embeds.append((embed, view, montage_bytes))
 
     # Send all embeds sequentially to the configured channel using Flask app helper
     channel_id = ANNOUNCEMENT_TYPES.get("event-reminder", {}).get("channel_id")
@@ -251,16 +287,28 @@ def post_regular_event_reminder():
 
         sent_ids = []
         for emb in embeds:
-            # each embed entry is a tuple (embed, view)
-            if isinstance(emb, tuple) and len(emb) == 2:
-                embed_obj, view_obj = emb
-            else:
-                embed_obj, view_obj = emb, None
+            # each embed entry is a tuple (embed, view, montage_bytes)
+            embed_obj, view_obj, montage_bytes = emb
+            file_obj = None
+            if montage_bytes:
+                try:
+                    file_obj = discord.File(BytesIO(montage_bytes), filename="montage.png")
+                    # set embed image to attachment
+                    embed_obj.set_image(url="attachment://montage.png")
+                except Exception:
+                    file_obj = None
+
             try:
-                msg = await channel.send(embed=embed_obj, view=view_obj)
+                if file_obj is not None:
+                    msg = await channel.send(embed=embed_obj, view=view_obj, file=file_obj)
+                else:
+                    msg = await channel.send(embed=embed_obj, view=view_obj)
             except TypeError:
                 # Older discord.py versions or incompatible send signature may not accept view; fallback
-                msg = await channel.send(embed=embed_obj)
+                if file_obj is not None:
+                    msg = await channel.send(embed=embed_obj, file=file_obj)
+                else:
+                    msg = await channel.send(embed=embed_obj)
             sent_ids.append(getattr(msg, "id", None))
         return sent_ids
 
@@ -273,146 +321,7 @@ def post_regular_event_reminder():
     except Exception as exc:
         return jsonify({"error": "Failed to deliver embeds to Discord", "detail": str(exc)}), 500
 
-    # Ensure the bot has an interaction handler for our event buttons registered.
-    # We'll register a single listener on the bot to handle custom_id values like 'evt:<event_id>'.
-    def _register_interaction_handler():
-        bot = getattr(app, "bot", None)
-        if bot is None:
-            return
-
-        # Avoid registering the handler multiple times
-        if getattr(app, "_evt_listener_registered", False):
-            return
-
-        async def _interaction_handler(interaction: discord.Interaction):
-            try:
-                if interaction.type != discord.InteractionType.component:
-                    return
-                data = getattr(interaction, "data", None) or {}
-                custom_id = data.get("custom_id")
-                if not custom_id or not str(custom_id).startswith("evt:"):
-                    return
-
-                event_id = str(custom_id).split(":", 1)[1]
-                entry = getattr(app, "event_store", {}).get(event_id)
-                ev = None
-                if entry:
-                    try:
-                        expires = entry.get("expires_at")
-                        now = datetime.now(timezone.utc).timestamp()
-                        if expires is None or expires < now:
-                            # expired: remove and treat as missing
-                            try:
-                                del app.event_store[event_id]
-                            except Exception:
-                                pass
-                            ev = None
-                        else:
-                            ev = entry.get("event")
-                    except Exception:
-                        ev = entry.get("event") if isinstance(entry, dict) else None
-                if not ev:
-                     resp = getattr(interaction, "response", None)
-                     if resp and hasattr(resp, "send_message"):
-                         await resp.send_message("Event not found or expired.", ephemeral=True)
-                     else:
-                         try:
-                             await interaction.followup.send("Event not found or expired.", ephemeral=True)
-                         except Exception:
-                             pass
-                     return
-
-                # Build and send an ephemeral embed with event details (same logic as before)
-                title = ev.get("event_name") or "(Unnamed event)"
-                description = ev.get("event_description") or ""
-                color = ANNOUNCEMENT_TYPES.get("event-reminder", {}).get("color", 0x2F3136)
-
-                embed = discord.Embed(title=title, description=description, color=color)
-
-                def _parse_time(t):
-                    if not t:
-                        return None
-                    try:
-                        if isinstance(t, str):
-                            dt = parse_vatsim_logon_time(t)
-                        elif isinstance(t, datetime):
-                            dt = t
-                        else:
-                            return None
-                        if dt.tzinfo is None:
-                            dt = dt.replace(tzinfo=timezone.utc)
-                        return dt
-                    except Exception:
-                        return None
-
-                start = _parse_time(ev.get("event_start_time"))
-                end = _parse_time(ev.get("event_end_time"))
-
-                if start and end:
-                    embed.add_field(name="When", value=f"<t:{int(start.timestamp())}:F> to <t:{int(end.timestamp())}:F>", inline=False)
-                elif start:
-                    embed.add_field(name="When", value=f"<t:{int(start.timestamp())}:F>", inline=False)
-                elif end:
-                    embed.add_field(name="When", value=f"Ends <t:{int(end.timestamp())}:F>", inline=False)
-
-                ev_type = ev.get("event_type")
-                host = ev.get("event_host")
-                if ev_type:
-                    embed.add_field(name="Type", value=str(ev_type), inline=True)
-                if host:
-                    embed.add_field(name="Host", value=str(host), inline=True)
-
-                featured = ev.get("event_feature_fields") or []
-                if isinstance(featured, list) and all(isinstance(x, str) for x in featured) and featured:
-                    embed.add_field(name="Featured", value=", ".join(featured), inline=False)
-
-                event_id_val = ev.get("event_id")
-                if event_id_val:
-                    event_url = f"https://vzdc.org/events/{event_id_val}"
-                    embed.add_field(name="Event Page", value=event_url, inline=False)
-                    embed.set_footer(text=f"ID: {event_id_val}")
-
-                banner = ev.get("event_banner_url")
-                if banner:
-                    try:
-                        embed.set_image(url=banner)
-                    except Exception:
-                        pass
-
-                resp = getattr(interaction, "response", None)
-                if resp and hasattr(resp, "send_message"):
-                    await resp.send_message(embed=embed, ephemeral=True)
-                else:
-                    try:
-                        await interaction.followup.send(embed=embed, ephemeral=True)
-                    except Exception:
-                        pass
-
-            except Exception:
-                resp = getattr(interaction, "response", None)
-                if resp and hasattr(resp, "send_message"):
-                    try:
-                        await resp.send_message("Error handling event button.", ephemeral=True)
-                    except Exception:
-                        pass
-                else:
-                    try:
-                        await interaction.followup.send("Error handling event button.", ephemeral=True)
-                    except Exception:
-                        pass
-
-        # Register the listener with the bot
-        try:
-            bot.add_listener(_interaction_handler, "on_interaction")
-            app._evt_listener_registered = True
-        except Exception:
-            # if registration fails, do not crash the API response
-            pass
-
-    # Attempt registration now (no-op if bot missing or handler already registered)
-    try:
-        _register_interaction_handler()
-    except Exception:
-        pass
+    # (No interactive custom-button handler is registered here; each embed includes a link button
+    # and the embed title is clickable because embed.url is set to the event page when available.)
 
     return jsonify({"status": "ok", "sent": len(embeds), "message_ids": result}), 200

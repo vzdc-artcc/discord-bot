@@ -1,31 +1,15 @@
-def format_event_time_range(start_str: str, end_str: str) -> str:
-    try:
-        start_dt = date_parser.parse(start_str)
-        end_dt = date_parser.parse(end_str)
+def parse_position(position_str: str) -> str:
+    position_str = position_str.strip().split("_")
+    if len(position_str) > 2:
+        category = position_str[2]
+        return category
+    elif len(position_str) == 2:
+        category = position_str[1]
+        return category
+    else:
+        return "UNKNOWN"
 
-        date_format = "%B %d"
-        if start_dt.year != datetime.utcnow().year:
-            date_format += ", %Y"
-
-        start_date_formatted = start_dt.strftime(date_format)
-        end_date_formatted = end_dt.strftime(date_format)
-
-        time_format = "%H%Mz"
-
-        if start_dt.date() == end_dt.date():
-            return f"{start_date_formatted} | {start_dt.strftime(time_format)} - {end_dt.strftime(time_format)}"
-        else:
-            return (
-                f"{start_date_formatted} {start_dt.strftime(time_format)} - "
-                f"{end_date_formatted} {end_dt.strftime(time_format)}"
-            )
-
-    except Exception as e:
-        print(f"Error parsing event times {start_str} - {end_str}: {e}")
-        return f"{start_str} - {end_str}"
-
-def get_banner_url(banner_key: str) -> str:
-    if not IMAGE_BASE_URL:
-        print("Warning: IMAGE_BASE_URL not configured. Cannot construct banner URL.")
-        return None
-    return f"{IMAGE_BASE_URL}{banner_key}"
+if __name__ == "__main__":
+    print(parse_position("IAD_APP"))
+    print(parse_position("IAD_M_APP"))
+    print(parse_position("DC_CTR"))

@@ -50,22 +50,12 @@
       "filename": "logs/server_events.jsonl",
       "maxBytes": 10000000,
       "backupCount": 5
-    },
-    "queue_handler": {
-      "class": "logging.handlers.QueueHandler",
-      "handlers": [
-        "stderr",
-        "file_json"
-      ],
-      "respect_handler_level": true
     }
   },
   "loggers": {
     "root": {
       "level": "DEBUG",
-      "handlers": [
-        "queue_handler"
-      ]
+      "handlers": ["stderr", "file_json"]
     },
     "deleted_messages": {
       "level": "INFO",

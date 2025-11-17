@@ -1,7 +1,10 @@
 import datetime as dt
 import json
 import logging
-from typing import override
+try:
+    from typing import override
+except Exception:
+    from typing_extensions import override
 
 LOG_RECORD_BUILTIN_ATTRS = {
     "args",

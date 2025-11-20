@@ -32,6 +32,7 @@ def handle_announcements():
         return jsonify({"error": "Request must be in JSON format"}), 400
 
     data = request.get_json()
+    logger.info(f"API Accessed for announcement with data: {data}")
 
     required_fields = ["message_type", "title", "body"]
     for field in required_fields:

@@ -121,5 +121,9 @@ ANNOUNCEMENT_TYPES = {
         "color": discord.Color.dark_blue().value,
         "title_prefix": "Event Posting Posting:"
     },
-
+    "event-announcement": {
+        "channel_id": EVENT_ANNOUNCEMENT_CHANNEL_ID,
+        "color": discord.Color.dark_blue().value,
+        "title_prefix": "Event Announcement:"
+    },
 }

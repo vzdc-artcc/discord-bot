@@ -5,7 +5,7 @@ import os
 from datetime import datetime, timezone
 from utils.vatsim import parse_vatsim_logon_time
 from extensions.api_server import app, api_key_required
-from config import ANNOUNCEMENT_TYPES
+import config as cfg
 
 bp = Blueprint("regular_event_reminder", __name__, url_prefix="/regular_event_reminder")
 
@@ -19,23 +19,7 @@ def _safe_get(d: Dict[str, Any], key: str, default=None):
 def post_regular_event_reminder():
     """Accepts a payload with a list of events for the week and posts an embed for each
 
-    Expected JSON shape:
-    {
-        "events": [
-            {
-                "event_name": "...",
-                "event_id": "...",
-                "event_description": "...",
-                "event_start_time": "2025-11-17T00:00:00Z",
-                "event_end_time": "2025-11-17T02:00:00Z",
-                "event_banner_url": "https://...",
-                "event_type": "training",
-                "event_host": "Example Host",
-                "event_featured_fields": [ {"name":"Field","value":"Value"}, ... ]
-            },
-            ...
-        ]
-    }
+    Expected JSON shape includes either `guild_id` or `channel_id` to determine where the message should be posted.
     """
     data = request.get_json(silent=True)
     if not data:
@@ -45,8 +29,20 @@ def post_regular_event_reminder():
     if not isinstance(events, list) or len(events) == 0:
         return jsonify({"error": "`events` must be a non-empty list"}), 400
 
+    guild_id = data.get("guild_id")
+    channel_override = data.get("channel_id")
+
+    # Resolve the target channel id
+    target_channel_id = None
+    if channel_override:
+        target_channel_id = int(channel_override)
+    elif guild_id is not None:
+        target_channel_id = cfg.resolve_announcement_target_channel(guild_id, "event-reminder")
+
+    if target_channel_id is None:
+        return jsonify({"error": "No target channel determined. Provide `guild_id` or `channel_id`."}), 400
+
     # Store events in the Flask app's event_store so button interaction handlers can access details.
-    # Initialize event_store if missing.
     try:
         if not hasattr(app, "event_store") or not isinstance(getattr(app, "event_store"), dict):
             app.event_store = {}
@@ -82,8 +78,8 @@ def post_regular_event_reminder():
         Image = ImageDraw = ImageFont = None
 
     # Local copies for nested helpers and static analysis
-    prefix = ANNOUNCEMENT_TYPES.get("event-reminder", {}).get("title_prefix", "Event Reminder:")
-    color = ANNOUNCEMENT_TYPES.get("event-reminder", {}).get("color", 0x2F3136)
+    prefix = cfg.ANNOUNCEMENT_TYPES.get("event-reminder", {}).get("title_prefix", "Event Reminder:")
+    color = cfg.ANNOUNCEMENT_TYPES.get("event-reminder", {}).get("color", 0x2F3136)
     max_field_name = 256
     max_field_value = 1024
 
@@ -265,9 +261,6 @@ def post_regular_event_reminder():
         embeds.append((embed, view, montage_bytes))
 
     # Send all embeds sequentially to the configured channel using Flask app helper
-    channel_id = ANNOUNCEMENT_TYPES.get("event-reminder", {}).get("channel_id")
-    if not channel_id:
-        return jsonify({"error": "Event announcement channel not configured on server"}), 500
 
     async def _send_all():
         bot = getattr(app, "bot", None)
@@ -275,15 +268,15 @@ def post_regular_event_reminder():
             raise RuntimeError("Discord bot not attached to Flask app")
 
         # Try get_channel (cache) then fetch_channel
-        channel = bot.get_channel(channel_id)
+        channel = bot.get_channel(target_channel_id)
         if channel is None:
             try:
-                channel = await bot.fetch_channel(channel_id)
+                channel = await bot.fetch_channel(target_channel_id)
             except Exception:
                 channel = None
 
         if channel is None:
-            raise RuntimeError(f"Could not find channel with id {channel_id}")
+            raise RuntimeError(f"Could not find channel with id {target_channel_id}")
 
         sent_ids = []
         for emb in embeds:

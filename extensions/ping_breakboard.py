@@ -4,11 +4,15 @@ from bot import logger
 from discord.ext import commands
 import json
 import os
-from config import BREAK_BOARD_CHANNEL_ID, BREAK_BOARD_ROLE_MAP
 import re
+import config as cfg
 
-ROLE_SELECTOR_MESSAGE_ID_FILE = f"{os.getcwd()}/data/breakboard_selector_message_id.json"
-MESSAGE_ID_FILE = f"{os.getcwd()}/data/notification_message_id.json"
+# We'll store message ids per guild to avoid cross-guild collisions.
+def _role_selector_file_for_guild(guild_id: int):
+    return f"{os.getcwd()}/data/breakboard_selector_message_id_{guild_id}.json"
+
+def _notification_file_for_guild(guild_id: int):
+    return f"{os.getcwd()}/data/notification_message_id_{guild_id}.json"
 
 class BreakRequestActions(discord.ui.View):
     def __init__(self, request_user_id: int):
@@ -53,7 +57,6 @@ class BreakRequestActions(discord.ui.View):
 
         for item in self.children:
             item.disabled = True
-        # await interaction.message.edit(view=self)
 
     @discord.ui.button(label="Done / Delete", style=discord.ButtonStyle.danger, custom_id="delete_break_request")
     async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button  ):
@@ -77,6 +80,7 @@ class BreakRequestActions(discord.ui.View):
         except Exception as e:
             await interaction.followup.send(f"Failed to delete message: {e}", ephemeral=True)
             logger.info(f"Error deleting break request message: {e}")
+
 
 class BreakTimeModal(discord.ui.Modal, title="Break Request Details"):
     def __init__(self, bot_instance: commands.Bot, role_name: str, role_id: int):
@@ -146,60 +150,59 @@ class BreakBoardButtons(discord.ui.View):
 
     @discord.ui.button(label="Unrestricted GND", style=discord.ButtonStyle.blurple, custom_id="gnd_unrestricted")
     async def gnd_unrestricted_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = BreakTimeModal(self.bot, "Unrestricted GND", BREAK_BOARD_ROLE_MAP["gnd_unrestricted"])
+        role_id = cfg.get_role_for_guild(interaction.guild.id, "gnd_unrestricted")
+        modal = BreakTimeModal(self.bot, "Unrestricted GND", role_id)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Tier 1 GND", style=discord.ButtonStyle.blurple, custom_id="gnd_tier1")
     async def gnd_tier1_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = BreakTimeModal(self.bot, "Tier 1 GND", BREAK_BOARD_ROLE_MAP["gnd_tier1"])
+        role_id = cfg.get_role_for_guild(interaction.guild.id, "gnd_tier1")
+        modal = BreakTimeModal(self.bot, "Tier 1 GND", role_id)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Unrestricted TWR", style=discord.ButtonStyle.blurple, custom_id="twr_unrestricted")
     async def twr_unrestricted_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = BreakTimeModal(self.bot, "Unrestricted TWR", BREAK_BOARD_ROLE_MAP["twr_unrestricted"])
+        role_id = cfg.get_role_for_guild(interaction.guild.id, "twr_unrestricted")
+        modal = BreakTimeModal(self.bot, "Unrestricted TWR", role_id)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Tier 1 TWR", style=discord.ButtonStyle.blurple, custom_id="twr_tier1")
     async def twr_tier1_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = BreakTimeModal(self.bot, "Tier 1 TWR", BREAK_BOARD_ROLE_MAP["twr_tier1"])
+        role_id = cfg.get_role_for_guild(interaction.guild.id, "twr_tier1")
+        modal = BreakTimeModal(self.bot, "Tier 1 TWR", role_id)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Unrestricted APP", style=discord.ButtonStyle.blurple, custom_id="app_unrestricted")
     async def app_unrestricted_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = BreakTimeModal(self.bot, "Unrestricted APP", BREAK_BOARD_ROLE_MAP["app_unrestricted"])
+        role_id = cfg.get_role_for_guild(interaction.guild.id, "app_unrestricted")
+        modal = BreakTimeModal(self.bot, "Unrestricted APP", role_id)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="PCT", style=discord.ButtonStyle.blurple, custom_id="pct")
     async def pct_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = BreakTimeModal(self.bot, "PCT", BREAK_BOARD_ROLE_MAP["pct"])
+        role_id = cfg.get_role_for_guild(interaction.guild.id, "pct")
+        modal = BreakTimeModal(self.bot, "PCT", role_id)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Center", style=discord.ButtonStyle.blurple, custom_id="center")
     async def center_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = BreakTimeModal(self.bot, "Center", BREAK_BOARD_ROLE_MAP["center"])
+        role_id = cfg.get_role_for_guild(interaction.guild.id, "center")
+        modal = BreakTimeModal(self.bot, "Center", role_id)
         await interaction.response.send_modal(modal)
 
 
 class BreakBoard(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.message_id = None
-        self.channel_id = BREAK_BOARD_CHANNEL_ID
+        # message ids are tracked per-guild; not loaded globally here
+        logger.info("BreakBoard cog initialized.")
 
-        if os.path.exists(MESSAGE_ID_FILE):
-            with open(MESSAGE_ID_FILE, "r") as f:
-                data = json.load(f)
-                self.message_id = data.get("message_id")
-                if data.get("channel_id") != self.channel_id:
-                    logger.info("Warning: Notification channel ID mismatch in saved data. Resetting.")
-                    self.message_id = None
-        else:
-            os.makedirs(os.path.dirname(MESSAGE_ID_FILE), exist_ok=True)
-
-    def save_message_id(self, message_id: int):
-        self.message_id = message_id
-        with open(MESSAGE_ID_FILE, "w") as f:
-            json.dump({"message_id": message_id, "channel_id": self.channel_id}, f)
+    def save_message_id(self, message_id: int, channel_id: int, guild_id: int):
+        # persist the message id and channel id for this guild only
+        path = _notification_file_for_guild(guild_id)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump({"message_id": message_id, "channel_id": channel_id}, f)
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -207,34 +210,49 @@ class BreakBoard(commands.Cog):
             return
 
         logger.info("BreakBoard cog ready.")
-        channel = self.bot.get_channel(self.channel_id)
-        if not channel:
-            logger.info(f"Error: BreakBoard channel with ID {self.channel_id} not found.")
-            return
 
-        if self.message_id:
-            try:
-                message = await channel.fetch_message(self.message_id)
-                self.bot.add_view(BreakBoardButtons(self.bot), message_id=message.id)
-                logger.info(f"Found existing BreakBoard message (ID: {self.message_id}). Re-attaching view.")
-                return
-            except discord.NotFound:
-                logger.info("Previous BreakBoard message not found. Sending a new one.")
-                self.message_id = None
-            except discord.Forbidden:
-                logger.info(f"Bot doesn't have permission to fetch message {self.message_id} in channel {self.channel_id}.")
-                self.message_id = None
+        # Initialize per-guild behavior for every guild the bot is in.
+        for guild in self.bot.guilds:
+            guild_cfg = cfg.get_guild_config(guild.id)
+            channel_id = guild_cfg.get_channel("break_board_channel_id")
+            if not channel_id:
+                logger.info(f"No breakboard channel configured for guild {guild.id} ({guild.name}), skipping.")
+                continue
 
-        await self.send_initial_embed_with_buttons(channel)
+            channel = self.bot.get_channel(channel_id) or await self.bot.fetch_channel(channel_id)
+            if not channel:
+                logger.info(f"Error: BreakBoard channel with ID {channel_id} not found in guild {guild.id}.")
+                continue
+
+            # Attempt to load a per-guild saved message id
+            msg_file = _role_selector_file_for_guild(guild.id)
+            saved_message_id = None
+            if os.path.exists(msg_file):
+                try:
+                    with open(msg_file, "r") as f:
+                        data = json.load(f)
+                        saved_message_id = data.get("message_id")
+                        # ignore stored channel mismatch — we'll use configured channel
+                except Exception:
+                    saved_message_id = None
+
+            if saved_message_id:
+                try:
+                    message = await channel.fetch_message(saved_message_id)
+                    self.bot.add_view(BreakBoardButtons(self.bot), message_id=message.id)
+                    logger.info(f"Found existing BreakBoard message (ID: {saved_message_id}) for guild {guild.id}. Re-attaching view.")
+                    continue
+                except discord.NotFound:
+                    logger.info("Previous BreakBoard message not found. Sending a new one.")
+                except discord.Forbidden:
+                    logger.info(f"Bot doesn't have permission to fetch message {saved_message_id} in channel {channel_id}.")
+
+            await self.send_initial_embed_with_buttons(channel)
 
     async def send_notification(self, interaction: discord.Interaction, role_name: str, role_id: int,
                                 wait_time: str = "no specific time"):
 
-        with open(MESSAGE_ID_FILE, "r") as f:
-            file = f.read()
-        time = datetime.datetime.utcnow()
-        logger.info(f"BREAKBOARD FILE: {file}, time: {time}")
-
+        # role resolution is guild-scoped
         role = interaction.guild.get_role(role_id)
         if not role:
             await interaction.followup.send(
@@ -271,7 +289,12 @@ class BreakBoard(commands.Cog):
 
         view = BreakBoardButtons(self.bot)
         message = await channel.send(embed=embed, view=view)
-        self.save_message_id(message.id)
+        # persist per-guild role selector message id
+        try:
+            guild_id = channel.guild.id
+            self.save_message_id(message.id, channel.id, guild_id)
+        except Exception:
+            logger.info("Could not persist breakboard message id for guild.")
         logger.info(f"Sent new BreakBoard message (ID: {message.id}) in channel {channel.name}.")
 
 
@@ -338,53 +361,55 @@ class RoleSelectionButtons(discord.ui.View):
 
     @discord.ui.button(label="Unrestricted GND", style=discord.ButtonStyle.secondary, custom_id="role_gnd_unrestricted")
     async def gnd_unrestricted_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Unrestricted GND", BREAK_BOARD_ROLE_MAP["gnd_unrestricted"])
+        role_id = cfg.get_role_for_guild(interaction.guild.id, "gnd_unrestricted")
+        await self.assign_or_remove_role(interaction, "Unrestricted GND", role_id)
 
     @discord.ui.button(label="Tier 1 GND", style=discord.ButtonStyle.secondary, custom_id="role_gnd_tier1")
     async def gnd_tier1_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Tier 1 GND", BREAK_BOARD_ROLE_MAP["gnd_tier1"])
+        role_id = cfg.get_role_for_guild(interaction.guild.id, "gnd_tier1")
+        await self.assign_or_remove_role(interaction, "Tier 1 GND", role_id)
 
     @discord.ui.button(label="Unrestricted TWR", style=discord.ButtonStyle.secondary, custom_id="role_twr_unrestricted")
     async def twr_unrestricted_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Unrestricted TWR", BREAK_BOARD_ROLE_MAP["twr_unrestricted"])
+        role_id = cfg.get_role_for_guild(interaction.guild.id, "twr_unrestricted")
+        await self.assign_or_remove_role(interaction, "Unrestricted TWR", role_id)
 
     @discord.ui.button(label="Tier 1 TWR", style=discord.ButtonStyle.secondary, custom_id="role_twr_tier1")
     async def twr_tier1_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Tier 1 TWR", BREAK_BOARD_ROLE_MAP["twr_tier1"])
+        role_id = cfg.get_role_for_guild(interaction.guild.id, "twr_tier1")
+        await self.assign_or_remove_role(interaction, "Tier 1 TWR", role_id)
 
     @discord.ui.button(label="Unrestricted APP", style=discord.ButtonStyle.secondary, custom_id="role_app_unrestricted")
     async def app_unrestricted_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Unrestricted APP", BREAK_BOARD_ROLE_MAP["app_unrestricted"])
+        role_id = cfg.get_role_for_guild(interaction.guild.id, "app_unrestricted")
+        await self.assign_or_remove_role(interaction, "Unrestricted APP", role_id)
 
     @discord.ui.button(label="PCT", style=discord.ButtonStyle.secondary, custom_id="role_pct")
     async def pct_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "PCT", BREAK_BOARD_ROLE_MAP["pct"])
+        role_id = cfg.get_role_for_guild(interaction.guild.id, "pct")
+        await self.assign_or_remove_role(interaction, "PCT", role_id)
 
     @discord.ui.button(label="Center", style=discord.ButtonStyle.secondary, custom_id="role_center")
     async def center_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Center", BREAK_BOARD_ROLE_MAP["center"])
+        role_id = cfg.get_role_for_guild(interaction.guild.id, "center")
+        await self.assign_or_remove_role(interaction, "Center", role_id)
 
 
 class RoleSelector(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        # message ids handled per-guild; nothing to preload here
         self.message_id = None
-        self.channel_id = BREAK_BOARD_CHANNEL_ID
+        self.channel_id = None
+        # ensure data directory exists
+        os.makedirs(os.path.join(os.getcwd(), "data"), exist_ok=True)
 
-        os.makedirs(os.path.dirname(ROLE_SELECTOR_MESSAGE_ID_FILE), exist_ok=True)
-
-        if os.path.exists(ROLE_SELECTOR_MESSAGE_ID_FILE):
-            with open(ROLE_SELECTOR_MESSAGE_ID_FILE, "r") as f:
-                data = json.load(f)
-                self.message_id = data.get("message_id")
-                if data.get("channel_id") != self.channel_id:
-                    logger.info("Warning: Role selector channel ID mismatch in saved data. Resetting.")
-                    self.message_id = None
-
-    def save_message_id(self, message_id: int):
-        self.message_id = message_id
-        with open(ROLE_SELECTOR_MESSAGE_ID_FILE, "w") as f:
-            json.dump({"message_id": message_id, "channel_id": self.channel_id}, f)
+    def save_message_id(self, message_id: int, channel_id: int, guild_id: int):
+        # save per-guild role selector message id
+        path = _role_selector_file_for_guild(guild_id)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump({"message_id": message_id, "channel_id": channel_id}, f)
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -392,25 +417,40 @@ class RoleSelector(commands.Cog):
             return
 
         logger.info("RoleSelector cog ready.")
-        channel = self.bot.get_channel(self.channel_id)
-        if not channel:
-            logger.info(f"Error: Role Selector channel with ID {self.channel_id} not found.")
-            return
+        for guild in self.bot.guilds:
+            guild_cfg = cfg.get_guild_config(guild.id)
+            channel_id = guild_cfg.get_channel("break_board_channel_id")
+            if not channel_id:
+                logger.info(f"No role selector channel configured for guild {guild.id} ({guild.name}), skipping.")
+                continue
 
-        # Try to fetch existing message
-        if self.message_id:
-            try:
-                message = await channel.fetch_message(self.message_id)
-                self.bot.add_view(RoleSelectionButtons(self.bot), message_id=message.id)
-                logger.info(f"Found existing role selector message (ID: {self.message_id}). Re-attaching view.")
-                return # Message found, no need to send new
-            except discord.NotFound:
-                logger.info("Previous role selector message not found. Sending a new one.")
-                self.message_id = None
-            except discord.Forbidden:
-                logger.info(f"Bot doesn't have permission to fetch message {self.message_id} in channel {self.channel_id}.")
-                self.message_id = None
-        await self.send_initial_embed_with_buttons(channel)
+            channel = self.bot.get_channel(channel_id) or await self.bot.fetch_channel(channel_id)
+            if not channel:
+                logger.info(f"Role Selector channel with ID {channel_id} not found in guild {guild.id}.")
+                continue
+
+            # try per-guild saved message
+            msg_file = _role_selector_file_for_guild(guild.id)
+            saved_message_id = None
+            if os.path.exists(msg_file):
+                try:
+                    with open(msg_file, "r") as f:
+                        data = json.load(f)
+                        saved_message_id = data.get("message_id")
+                except Exception:
+                    saved_message_id = None
+
+            if saved_message_id:
+                try:
+                    message = await channel.fetch_message(saved_message_id)
+                    self.bot.add_view(RoleSelectionButtons(self.bot), message_id=message.id)
+                    logger.info(f"Found existing role selector message (ID: {saved_message_id}) for guild {guild.id}. Re-attaching view.")
+                    continue
+                except discord.NotFound:
+                    logger.info("Previous role selector message not found. Sending a new one.")
+                except discord.Forbidden:
+                    logger.info(f"Bot doesn't have permission to fetch message {saved_message_id} in channel {channel_id}.")
+            await self.send_initial_embed_with_buttons(channel)
 
     async def send_initial_embed_with_buttons(self, channel: discord.TextChannel):
         embed = discord.Embed(
@@ -427,8 +467,13 @@ class RoleSelector(commands.Cog):
 
         view = RoleSelectionButtons(self.bot)
         message = await channel.send(embed=embed, view=view)
-        self.save_message_id(message.id)
+        try:
+            guild_id = channel.guild.id
+            self.save_message_id(message.id, channel.id, guild_id)
+        except Exception:
+            logger.info("Could not persist role selector message id for guild.")
         logger.info(f"Sent new role selector message (ID: {message.id}) in channel {channel.name}.")
+
 
 async def setup(bot):
     await bot.add_cog(RoleSelector(bot))

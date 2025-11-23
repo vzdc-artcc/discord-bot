@@ -54,11 +54,31 @@ class MyJSONFormatter(logging.Formatter):
                 record.created, tz=dt.timezone.utc
             ).isoformat(),
         }
-        if record.exc_info is not None:
-            always_fields["exc_info"] = self.formatException(record.exc_info)
+        # Be defensive: exc_info may be malformed (e.g., a boolean) when handlers
+        # or other code erroneously set it. Only attempt to format if it looks
+        # like the expected exc_info tuple or an Exception instance. If formatting
+        # fails, capture a simple string representation instead.
+        if record.exc_info:
+            try:
+                if isinstance(record.exc_info, tuple) or isinstance(record.exc_info, BaseException):
+                    always_fields["exc_info"] = self.formatException(record.exc_info)
+                else:
+                    # Unexpected type; store repr to avoid raising in formatter
+                    always_fields["exc_info"] = repr(record.exc_info)
+            except Exception:
+                try:
+                    always_fields["exc_info"] = str(record.exc_info)
+                except Exception:
+                    always_fields["exc_info"] = "<unformattable exc_info>"
 
-        if record.stack_info is not None:
-            always_fields["stack_info"] = self.formatStack(record.stack_info)
+        if record.stack_info:
+            try:
+                always_fields["stack_info"] = self.formatStack(record.stack_info)
+            except Exception:
+                try:
+                    always_fields["stack_info"] = str(record.stack_info)
+                except Exception:
+                    always_fields["stack_info"] = "<unformattable stack_info>"
 
         message = {
             key: msg_val

@@ -11,6 +11,8 @@ from config import DISCORD_TOKEN
 from discord.ext import commands
 
 
+from extensions.ntml import NTMLListener
+
 intents = discord.Intents.all()
 intents.messages = True
 intents.members = True

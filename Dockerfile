@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Expose the API port (from config.py / .env)
-EXPOSE 80
+EXPOSE 6000
 
 # Use JSON array form for CMD (avoids the warning you saw)
 CMD ["python", "bot.py"]

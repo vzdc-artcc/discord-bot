@@ -1,12 +1,13 @@
 import datetime
-
 import discord
+from bot import logger
 from discord.ext import commands
 import json
 import os
 from config import BREAK_BOARD_CHANNEL_ID, BREAK_BOARD_ROLE_MAP
 import re
 
+ROLE_SELECTOR_MESSAGE_ID_FILE = f"{os.getcwd()}/data/breakboard_selector_message_id.json"
 MESSAGE_ID_FILE = f"{os.getcwd()}/data/notification_message_id.json"
 
 class BreakRequestActions(discord.ui.View):
@@ -21,7 +22,7 @@ class BreakRequestActions(discord.ui.View):
             await self.message.edit(view=self)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
-        print(f"Error during BreakRequestActions interaction for {item.custom_id}: {error}")
+        logger.info(f"Error during BreakRequestActions interaction for {item.custom_id}: {error}")
         if not interaction.response.is_done():
             await interaction.response.send_message("An error occurred with this action.", ephemeral=True)
         else:
@@ -36,7 +37,7 @@ class BreakRequestActions(discord.ui.View):
 
         if requesting_user:
             await interaction.channel.send(
-                f"🚨 {reliever_user.mention} has claimed the break for {requesting_user.mention}! "
+                f"🚨 {reliever_user.mention} has claimed the position for {requesting_user.mention}! "
                 "Please coordinate directly.",
                 view=NotificationDeleteView(reliever_user.id)
             )
@@ -44,7 +45,7 @@ class BreakRequestActions(discord.ui.View):
             try:
                 await interaction.message.delete()
             except Exception as e:
-                print(f"Error deleting break request message after claim: {e}")
+                logger.error("Error deleting break request message after claim: {e}")
         else:
             await interaction.channel.send(
                 f"🚨 {reliever_user.mention} has claimed this break! The original requester is no longer in the server."
@@ -69,13 +70,13 @@ class BreakRequestActions(discord.ui.View):
 
         try:
             await interaction.message.delete()
-            print(f"Break request message deleted by {interaction.user.name}.")
+            logger.info(f"Break request message deleted by {interaction.user.name}.")
 
         except discord.Forbidden:
             await interaction.followup.send("I don't have permission to delete this message.", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"Failed to delete message: {e}", ephemeral=True)
-            print(f"Error deleting break request message: {e}")
+            logger.info(f"Error deleting break request message: {e}")
 
 class BreakTimeModal(discord.ui.Modal, title="Break Request Details"):
     def __init__(self, bot_instance: commands.Bot, role_name: str, role_id: int):
@@ -118,13 +119,13 @@ class BreakTimeModal(discord.ui.Modal, title="Break Request Details"):
                 wait_time_display
             )
         else:
-            print("Error: BreakBoard cog not found during modal submission.")
+            logger.info("Error: BreakBoard cog not found during modal submission.")
             await interaction.followup.send(
                 "An internal error occurred: BreakBoard cog not found.", ephemeral=True
             )
 
     async def on_error(self, interaction: discord.Interaction, error: Exception):
-        print(f"Error submitting modal for {self.role_name}: {error}")
+        logger.info(f"Error submitting modal for {self.role_name}: {error}")
         if not interaction.response.is_done():
             await interaction.response.send_message("An error occurred while processing your request.", ephemeral=True)
         else:
@@ -137,7 +138,7 @@ class BreakBoardButtons(discord.ui.View):
         self.bot = bot
 
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
-        print(f"Error during button interaction for {item.custom_id}: {error}")
+        logger.info(f"Error during button interaction for {item.custom_id}: {error}")
         if not interaction.response.is_done():
             await interaction.response.send_message("An error occurred with this button.", ephemeral=True)
         else:
@@ -190,7 +191,7 @@ class BreakBoard(commands.Cog):
                 data = json.load(f)
                 self.message_id = data.get("message_id")
                 if data.get("channel_id") != self.channel_id:
-                    print("Warning: Notification channel ID mismatch in saved data. Resetting.")
+                    logger.info("Warning: Notification channel ID mismatch in saved data. Resetting.")
                     self.message_id = None
         else:
             os.makedirs(os.path.dirname(MESSAGE_ID_FILE), exist_ok=True)
@@ -205,23 +206,23 @@ class BreakBoard(commands.Cog):
         if not self.bot.is_ready():
             return
 
-        print("BreakBoard cog ready.")
+        logger.info("BreakBoard cog ready.")
         channel = self.bot.get_channel(self.channel_id)
         if not channel:
-            print(f"Error: BreakBoard channel with ID {self.channel_id} not found.")
+            logger.info(f"Error: BreakBoard channel with ID {self.channel_id} not found.")
             return
 
         if self.message_id:
             try:
                 message = await channel.fetch_message(self.message_id)
                 self.bot.add_view(BreakBoardButtons(self.bot), message_id=message.id)
-                print(f"Found existing BreakBoard message (ID: {self.message_id}). Re-attaching view.")
+                logger.info(f"Found existing BreakBoard message (ID: {self.message_id}). Re-attaching view.")
                 return
             except discord.NotFound:
-                print("Previous BreakBoard message not found. Sending a new one.")
+                logger.info("Previous BreakBoard message not found. Sending a new one.")
                 self.message_id = None
             except discord.Forbidden:
-                print(f"Bot doesn't have permission to fetch message {self.message_id} in channel {self.channel_id}.")
+                logger.info(f"Bot doesn't have permission to fetch message {self.message_id} in channel {self.channel_id}.")
                 self.message_id = None
 
         await self.send_initial_embed_with_buttons(channel)
@@ -232,7 +233,7 @@ class BreakBoard(commands.Cog):
         with open(MESSAGE_ID_FILE, "r") as f:
             file = f.read()
         time = datetime.datetime.utcnow()
-        print(f"BREAKBOARD FILE: {file}, time: {time}")
+        logger.info(f"BREAKBOARD FILE: {file}, time: {time}")
 
         role = interaction.guild.get_role(role_id)
         if not role:
@@ -243,7 +244,7 @@ class BreakBoard(commands.Cog):
         user_mention = interaction.user.mention
         message_to_send = (
             f"{role.mention} **{role_name} break request!** "
-            f"Controller {user_mention} is requesting a break for {role_name} {wait_time}."
+            f"Controller {user_mention} is requesting a relief for {role_name}. They can wait {wait_time}."
         )
 
         try:
@@ -255,7 +256,7 @@ class BreakBoard(commands.Cog):
 
         except Exception as e:
             await interaction.followup.send(f"Failed to send notification: {e}", ephemeral=True)
-            print(f"Failed to send notification for {role_name} (Role ID: {role_id}): {e}")
+            logger.info(f"Failed to send notification for {role_name} (Role ID: {role_id}): {e}")
 
     async def send_initial_embed_with_buttons(self, channel: discord.TextChannel):
         embed = discord.Embed(
@@ -271,11 +272,8 @@ class BreakBoard(commands.Cog):
         view = BreakBoardButtons(self.bot)
         message = await channel.send(embed=embed, view=view)
         self.save_message_id(message.id)
-        print(f"Sent new BreakBoard message (ID: {message.id}) in channel {channel.name}.")
+        logger.info(f"Sent new BreakBoard message (ID: {message.id}) in channel {channel.name}.")
 
-
-async def setup(bot):
-    await bot.add_cog(BreakBoard(bot))
 
 class NotificationDeleteView(discord.ui.View):
     def __init__(self, allowed_user_id: int):
@@ -297,3 +295,141 @@ class NotificationDeleteView(discord.ui.View):
             await interaction.response.send_message("I don't have permission to delete this message.", ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"Failed to delete message: {e}", ephemeral=True)
+            
+
+class RoleSelectionButtons(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
+        logger.info(f"Error during role selection interaction for {item.custom_id}: {error}")
+        await interaction.response.send_message("An error occurred while processing your role request.", ephemeral=True)
+
+    async def assign_or_remove_role(self, interaction: discord.Interaction, role_name_display: str, role_id: int):
+        await interaction.response.defer(ephemeral=True)
+
+        member = interaction.user
+        role = interaction.guild.get_role(role_id)
+
+        if not role:
+            await interaction.followup.send(
+                f"Error: Role '{role_name_display}' not found on the server. Please contact an administrator.",
+                ephemeral=True
+            )
+            return
+
+        if role in member.roles:
+            try:
+                await member.remove_roles(role)
+                await interaction.followup.send(f"You have **left** the `{role_name_display}` notification group.", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.followup.send("I don't have permissions to remove that role. Please check my permissions.", ephemeral=True)
+            except Exception as e:
+                await interaction.followup.send(f"An error occurred while removing the role: {e}", ephemeral=True)
+        else:
+            try:
+                await member.add_roles(role)
+                await interaction.followup.send(f"You have **joined** the `{role_name_display}` notification group.", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.followup.send("I don't have permissions to add that role. Please check my permissions.", ephemeral=True)
+            except Exception as e:
+                await interaction.followup.send(f"An error occurred while adding the role: {e}", ephemeral=True)
+
+    @discord.ui.button(label="Unrestricted GND", style=discord.ButtonStyle.secondary, custom_id="role_gnd_unrestricted")
+    async def gnd_unrestricted_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.assign_or_remove_role(interaction, "Unrestricted GND", BREAK_BOARD_ROLE_MAP["gnd_unrestricted"])
+
+    @discord.ui.button(label="Tier 1 GND", style=discord.ButtonStyle.secondary, custom_id="role_gnd_tier1")
+    async def gnd_tier1_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.assign_or_remove_role(interaction, "Tier 1 GND", BREAK_BOARD_ROLE_MAP["gnd_tier1"])
+
+    @discord.ui.button(label="Unrestricted TWR", style=discord.ButtonStyle.secondary, custom_id="role_twr_unrestricted")
+    async def twr_unrestricted_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.assign_or_remove_role(interaction, "Unrestricted TWR", BREAK_BOARD_ROLE_MAP["twr_unrestricted"])
+
+    @discord.ui.button(label="Tier 1 TWR", style=discord.ButtonStyle.secondary, custom_id="role_twr_tier1")
+    async def twr_tier1_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.assign_or_remove_role(interaction, "Tier 1 TWR", BREAK_BOARD_ROLE_MAP["twr_tier1"])
+
+    @discord.ui.button(label="Unrestricted APP", style=discord.ButtonStyle.secondary, custom_id="role_app_unrestricted")
+    async def app_unrestricted_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.assign_or_remove_role(interaction, "Unrestricted APP", BREAK_BOARD_ROLE_MAP["app_unrestricted"])
+
+    @discord.ui.button(label="PCT", style=discord.ButtonStyle.secondary, custom_id="role_pct")
+    async def pct_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.assign_or_remove_role(interaction, "PCT", BREAK_BOARD_ROLE_MAP["pct"])
+
+    @discord.ui.button(label="Center", style=discord.ButtonStyle.secondary, custom_id="role_center")
+    async def center_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.assign_or_remove_role(interaction, "Center", BREAK_BOARD_ROLE_MAP["center"])
+
+
+class RoleSelector(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+        self.message_id = None
+        self.channel_id = BREAK_BOARD_CHANNEL_ID
+
+        os.makedirs(os.path.dirname(ROLE_SELECTOR_MESSAGE_ID_FILE), exist_ok=True)
+
+        if os.path.exists(ROLE_SELECTOR_MESSAGE_ID_FILE):
+            with open(ROLE_SELECTOR_MESSAGE_ID_FILE, "r") as f:
+                data = json.load(f)
+                self.message_id = data.get("message_id")
+                if data.get("channel_id") != self.channel_id:
+                    logger.info("Warning: Role selector channel ID mismatch in saved data. Resetting.")
+                    self.message_id = None
+
+    def save_message_id(self, message_id: int):
+        self.message_id = message_id
+        with open(ROLE_SELECTOR_MESSAGE_ID_FILE, "w") as f:
+            json.dump({"message_id": message_id, "channel_id": self.channel_id}, f)
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if not self.bot.is_ready():
+            return
+
+        logger.info("RoleSelector cog ready.")
+        channel = self.bot.get_channel(self.channel_id)
+        if not channel:
+            logger.info(f"Error: Role Selector channel with ID {self.channel_id} not found.")
+            return
+
+        # Try to fetch existing message
+        if self.message_id:
+            try:
+                message = await channel.fetch_message(self.message_id)
+                self.bot.add_view(RoleSelectionButtons(self.bot), message_id=message.id)
+                logger.info(f"Found existing role selector message (ID: {self.message_id}). Re-attaching view.")
+                return # Message found, no need to send new
+            except discord.NotFound:
+                logger.info("Previous role selector message not found. Sending a new one.")
+                self.message_id = None
+            except discord.Forbidden:
+                logger.info(f"Bot doesn't have permission to fetch message {self.message_id} in channel {self.channel_id}.")
+                self.message_id = None
+        await self.send_initial_embed_with_buttons(channel)
+
+    async def send_initial_embed_with_buttons(self, channel: discord.TextChannel):
+        embed = discord.Embed(
+            title="🔔 Controller Notification Preferences 🔔",
+            description=(
+                "Click the buttons below to **opt in or out** of receiving notifications "
+                "when controllers request a break for specific positions.\n\n"
+                "• If you have the role, clicking the button will **remove** it.\n"
+                "• If you don't have the role, clicking the button will **add** it."
+            ),
+            color=discord.Color.gold()
+        )
+        embed.set_footer(text="Your role preferences determine which break requests you see.")
+
+        view = RoleSelectionButtons(self.bot)
+        message = await channel.send(embed=embed, view=view)
+        self.save_message_id(message.id)
+        logger.info(f"Sent new role selector message (ID: {message.id}) in channel {channel.name}.")
+
+async def setup(bot):
+    await bot.add_cog(RoleSelector(bot))
+    await bot.add_cog(BreakBoard(bot))

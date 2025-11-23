@@ -1,0 +1,135 @@
+{
+	"info": {
+		"_postman_id": "e2437688-790c-47ec-9164-9c857b8aec37",
+		"name": "Announcements API - Local",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "48553408",
+		"_collection_link": "https://vainnor-c5569ab0-2740853.postman.co/workspace/Vainnor's-Workspace~37ef7ee0-1fa1-488f-84f5-a20f1e8e87f9/collection/48553408-e2437688-790c-47ec-9164-9c857b8aec37?action=share&source=collection_link&creator=48553408"
+	},
+	"item": [
+		{
+			"name": "Post Announcement",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					},
+					{
+						"key": "X-API-Key",
+						"value": "{{api_key}}"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"message_type\": \"event-posting\",\n  \"title\": \"Community Fly-in\",\n  \"body\": \"Join us this Saturday for a community fly-in event!\",\n  \"author_name\": \"Website Bot\",\n  \"banner_url\": \"https://example.com/banner.jpg\"\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/announcements",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"announcements"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Post Weekly Events (regular_event_reminder)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					},
+					{
+						"key": "X-API-Key",
+						"value": "{{api_key}}"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"events\": [\n    {\n      \"event_name\": \"Nashville Nights, Charlotte Lights\",\n      \"event_id\": \"ev-001\",\n      \"event_description\": \"Nashville Nights, Charlotte Lights\",\n      \"event_start_time\": \"2025-11-14T23:55:00Z\",\n      \"event_end_time\": \"2025-11-15T04:00:00Z\",\n      \"event_banner_url\": \"https://example.com/banner1.jpg\",\n      \"event_type\": \"FRIDAY_NIGHT_OPERATIONS\",\n      \"event_host\": \"\",\n      \"event_feature_fields\": []\n    },\n    {\n      \"event_name\": \"Rock Around the Clock: 24 Hours in Cleveland\",\n      \"event_id\": \"ev-002\",\n      \"event_description\": \"24-hour event in Cleveland\",\n      \"event_start_time\": \"2025-11-15T22:00:00Z\",\n      \"event_end_time\": \"2025-11-16T22:00:00Z\",\n      \"event_banner_url\": \"https://example.com/banner2.jpg\",\n      \"event_type\": \"SUPPORT_OPTIONAL\",\n      \"event_host\": \"\",\n      \"event_feature_fields\": []\n    },\n    {\n      \"event_name\": \"vZJX Presents: 11 Hours of F11\",\n      \"event_id\": \"ev-003\",\n      \"event_description\": \"vZJX Presents: 11 Hours of F11\",\n      \"event_start_time\": \"2025-11-16T16:00:00Z\",\n      \"event_end_time\": \"2025-11-17T03:00:00Z\",\n      \"event_banner_url\": \"https://example.com/banner3.jpg\",\n      \"event_type\": \"SUPPORT_OPTIONAL\",\n      \"event_host\": \"\",\n      \"event_feature_fields\": []\n    },\n    {\n      \"event_name\": \"West Atlantic Free Flight Experience\",\n      \"event_id\": \"ev-004\",\n      \"event_description\": \"West Atlantic Free Flight Experience\",\n      \"event_start_time\": \"2025-11-22T15:00:00Z\",\n      \"event_end_time\": \"2025-11-22T20:00:00Z\",\n      \"event_banner_url\": \"https://example.com/banner4.jpg\",\n      \"event_type\": \"SUPPORT_OPTIONAL\",\n      \"event_host\": \"\",\n      \"event_feature_fields\": []\n    },\n    {\n      \"event_name\": \"Pumpkin Pie and Patterns\",\n      \"event_id\": \"ev-005\",\n      \"event_description\": \"Pumpkin Pie and Patterns\",\n      \"event_start_time\": \"2025-11-24T23:55:00Z\",\n      \"event_end_time\": \"2025-11-25T04:00:00Z\",\n      \"event_banner_url\": \"https://example.com/banner5.jpg\",\n      \"event_type\": \"SUPPORT_OPTIONAL\",\n      \"event_host\": \"\",\n      \"event_feature_fields\": []\n    },\n    {\n      \"event_name\": \"Tuesday Nights in New York: Turkey Day at Teterboro\",\n      \"event_id\": \"ev-006\",\n      \"event_description\": \"Turkey Day at Teterboro\",\n      \"event_start_time\": \"2025-11-25T23:55:00Z\",\n      \"event_end_time\": \"2025-11-26T03:00:00Z\",\n      \"event_banner_url\": \"https://example.com/banner6.jpg\",\n      \"event_type\": \"SUPPORT_OPTIONAL\",\n      \"event_host\": \"\",\n      \"event_feature_fields\": []\n    },\n    {\n      \"event_name\": \"VATUSA Light up America\",\n      \"event_id\": \"ev-007\",\n      \"event_description\": \"VATUSA Light up America\",\n      \"event_start_time\": \"2025-11-28T23:55:00Z\",\n      \"event_end_time\": \"2025-11-29T04:00:00Z\",\n      \"event_banner_url\": \"https://example.com/banner7.jpg\",\n      \"event_type\": \"FRIDAY_NIGHT_OPERATIONS\",\n      \"event_host\": \"\",\n      \"event_feature_fields\": []\n    },\n    {\n      \"event_name\": \"60 Hours of BVARTCC\",\n      \"event_id\": \"ev-008\",\n      \"event_description\": \"60 Hours of BVARTCC\",\n      \"event_start_time\": \"2025-12-05T16:00:00Z\",\n      \"event_end_time\": \"2025-12-08T04:00:00Z\",\n      \"event_banner_url\": \"https://example.com/banner8.jpg\",\n      \"event_type\": \"SUPPORT_OPTIONAL\",\n      \"event_host\": \"\",\n      \"event_feature_fields\": []\n    },\n    {\n      \"event_name\": \"Cold Start FNO\",\n      \"event_id\": \"ev-009\",\n      \"event_description\": \"Cold Start FNO\",\n      \"event_start_time\": \"2025-12-05T23:55:00Z\",\n      \"event_end_time\": \"2025-12-06T04:00:00Z\",\n      \"event_banner_url\": \"https://example.com/banner9.jpg\",\n      \"event_type\": \"FRIDAY_NIGHT_OPERATIONS\",\n      \"event_host\": \"\",\n      \"event_feature_fields\": []\n    },\n    {\n      \"event_name\": \"A Wednesday Night at Washington National\",\n      \"event_id\": \"ev-010\",\n      \"event_description\": \"A Wednesday Night at Washington National\",\n      \"event_start_time\": \"2025-12-10T23:55:00Z\",\n      \"event_end_time\": \"2025-12-11T03:00:00Z\",\n      \"event_banner_url\": \"https://example.com/banner10.jpg\",\n      \"event_type\": \"HOME\",\n      \"event_host\": \"\",\n      \"event_feature_fields\": []\n    },\n    {\n      \"event_name\": \"Operation Good Cheer\",\n      \"event_id\": \"ev-011\",\n      \"event_description\": \"Operation Good Cheer\",\n      \"event_start_time\": \"2025-12-13T18:00:00Z\",\n      \"event_end_time\": \"2025-12-13T21:00:00Z\",\n      \"event_banner_url\": \"https://example.com/banner11.jpg\",\n      \"event_type\": \"SUPPORT_OPTIONAL\",\n      \"event_host\": \"\",\n      \"event_feature_fields\": []\n    },\n    {\n      \"event_name\": \"Operation Capitol Sentinel\",\n      \"event_id\": \"ev-012\",\n      \"event_description\": \"Operation Capitol Sentinel\",\n      \"event_start_time\": \"2025-12-13T19:00:00Z\",\n      \"event_end_time\": \"2025-12-13T21:00:00Z\",\n      \"event_banner_url\": \"https://example.com/banner12.jpg\",\n      \"event_type\": \"SUPPORT_REQUIRED\",\n      \"event_host\": \"\",\n      \"event_feature_fields\": []\n    },\n    {\n      \"event_name\": \"vZDC Holiday Shopping Event Regional Night\",\n      \"event_id\": \"ev-013\",\n      \"event_description\": \"vZDC Holiday Shopping Event Regional Night\",\n      \"event_start_time\": \"2025-12-15T23:59:00Z\",\n      \"event_end_time\": \"2025-12-16T03:00:00Z\",\n      \"event_banner_url\": \"https://example.com/banner13.jpg\",\n      \"event_type\": \"HOME\",\n      \"event_host\": \"\",\n      \"event_feature_fields\": []\n    }\n  ]\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/regular_event_reminder",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"regular_event_reminder"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Post Event Position Posting (event_position_posting)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					},
+					{
+						"key": "X-API-Key",
+						"value": "{{api_key}}"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"event_name\": \"A Wednesday Night at Washington National\",\n  \"event_id\": \"ev-010\",\n  \"event_description\": \"A Wednesday Night at Washington National\",\n  \"event_banner_url\": \"https://example.com/banner10.jpg\",\n  \"event_start_time\": \"2025-12-10T23:55:00Z\",\n  \"event_end_time\": \"2025-12-11T03:00:00Z\",\n  \"controllers\": [\n    {\n      \"controller_name\": \"Devon Graham\",\n      \"controller_rating\": 8,\n      \"controller_final_position\": \"DCAFR?\"\n    },\n    {\n      \"controller_name\": \"Harry Xu\",\n      \"controller_rating\": 4,\n      \"controller_final_position\": \"OJAAY?\"\n    },\n    {\n      \"controller_name\": \"Christos Savvopoulos\",\n      \"controller_rating\": 4,\n      \"controller_final_position\": \".\"\n    },\n    {\n      \"controller_name\": \"William Poff\",\n      \"controller_rating\": 4,\n      \"controller_final_position\": \"LURAY\"\n    },\n    {\n      \"controller_name\": \"Breno Padovani\",\n      \"controller_rating\": 4,\n      \"controller_final_position\": \"TYSON + KRANT?\"\n    }\n  ]\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/event_position_posting",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"event_position_posting"
+					]
+				}
+			},
+			"response": []
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"requests": {},
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"requests": {},
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:6000"
+		},
+		{
+			"key": "api_key",
+			"value": "REPLACE_WITH_YOUR_API_KEY"
+		}
+	]
+}

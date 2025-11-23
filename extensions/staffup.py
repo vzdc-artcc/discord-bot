@@ -1,136 +1,134 @@
 import asyncio
-import discord
-import aiohttp
 import traceback
 from datetime import datetime, timezone
-from discord import Embed
+import aiohttp
+import discord
 from discord.ext import commands, tasks
+from bot import logger
+from discord import Embed
+from config import STAFFUP_CHANNEL
 
-from config import watched_positions, atc_rating, STAFFUP_CHANNEL, VATUSA_API_KEY
+from utils.vatsim import parse_vatsim_logon_time
 
-online_zdc_controllers = []
+online_zdc_controllers: list = []
 
-def parse_vatsim_logon_time(logon_time_str: str) -> datetime:
 
-    parts = logon_time_str.replace('Z', '').split('.')
-    main_part = parts[0]
+def is_controller_active(controller: dict) -> bool:
+    """Return True if the given controller entry represents an active connection.
 
-    if len(parts) > 1:
-        fractional_seconds = parts[1]
-        truncated_fractional = fractional_seconds[:6]
-        logon_time_str_corrected = f"{main_part}.{truncated_fractional}+00:00"
-    else:
-        logon_time_str_corrected = f"{main_part}+00:00"
+    The data feed can represent activity in different places depending on version:
+    - top-level `isActive`
+    - `vatsimData.isActive`
+    - any entry in `connections` with `isActive` True
+    - any `positions` entry with `isActive` True
+    """
+    try:
+        if controller.get("isActive"):
+            return True
 
-    return datetime.fromisoformat(logon_time_str_corrected)
+        vatsim = controller.get("vatsimData") or {}
+        if vatsim.get("isActive"):
+            return True
+
+        for conn in controller.get("connections", []):
+            if conn and conn.get("isActive"):
+                return True
+
+        for pos in controller.get("positions", []):
+            if pos and pos.get("isActive"):
+                return True
+
+    except Exception:
+        # If anything unexpected occurs, err on the side of not treating the
+        # controller as active to avoid false-positives.
+        return False
+
+    return False
 
 
 class Staffup(commands.Cog):
+    """Staffup related commands."""
+
     def __init__(self, bot):
         self.bot = bot
-        print("Staffup Cog initialized.")
+        # instance storage for online controllers
+        self.online_zdc_controllers: list = []
+        # configured channel id (from config.STAFFUP_CHANNEL)
+        self.staffup_channel_id = STAFFUP_CHANNEL
+        logger.info("Staffup extension initialized.")
 
     @commands.Cog.listener()
     async def on_ready(self):
-        print("Staffup cog's on_ready fired.")
+        """Start the background loop when the bot is ready."""
+        logger.info("Staffup extension on_ready fired.")
         if not self.check_online_controllers.is_running():
-            print("Starting check_online_controllers task loop.")
+            logger.info("Starting check_online_controllers task loop.")
             self.check_online_controllers.start()
         else:
-            print("check_online_controllers task loop is already running.")
+            logger.info("check_online_controllers task loop is already running.")
 
     def cog_unload(self):
-        print("Staffup cog unloaded. Stopping check_online_controllers task loop.")
-        self.check_online_controllers.cancel()
-
-    async def get_real_name(self, cid: str) -> str:
-        if not VATUSA_API_KEY:
-            print("Warning: VATUSA_API_KEY not set. Cannot fetch real names.")
-            return cid
-
-        url = f"https://api.vatusa.net/v2/user/{cid}"
-        headers = {"Authorization": f"Token {VATUSA_API_KEY}"}
-
+        logger.info("Staffup cog unloaded. Stopping check_online_controllers task loop.")
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=5) as response:
-                    if response.status == 200:
-                        user_data = await response.json()
-                        data_payload = user_data.get('data', {})
-                        first_name = data_payload.get('fname')
-                        last_name = data_payload.get('lname')
-                        if first_name and last_name:
-                            return f"{first_name} {last_name}"
-                        else:
-                            print(f"VATUSA API: Name not found in data for CID {cid}. Response: {user_data}")
-                            return cid
-                    else:
-                        print(f"VATUSA API Error for CID {cid}: HTTP {response.status} - {await response.text()}")
-                        return cid
-        except aiohttp.ClientError as e:
-            print(f"VATUSA API Client Error for CID {cid}: {e}")
-            return cid
-        except asyncio.TimeoutError:
-            print(f"VATUSA API Timeout for CID {cid}.")
-            return cid
-        except Exception as e:
-            print(f"Unexpected error fetching real name for CID {cid}: {e}")
-            traceback.print_exc()
-            return cid
+            self.check_online_controllers.cancel()
+        except Exception:
+            logger.exception("Error occurred while stopping check_online_controllers task loop.")
 
-    @tasks.loop(seconds=15.0)
+    @tasks.loop(seconds=10.0)
     async def check_online_controllers(self):
-        global online_zdc_controllers
+        """Check for online controllers and update Staffup accordingly."""
+        logger.info("Checking online controllers for Staffup update...")
+        # use instance list
+        online_ref = self.online_zdc_controllers
 
         try:
             await self.bot.wait_until_ready()
 
-            staffup_channel = self.bot.get_channel(STAFFUP_CHANNEL)
-            if not staffup_channel:
-                print(f"Error: Staffup channel with ID {STAFFUP_CHANNEL} not found or inaccessible.")
+            # Resolve configured channel ID to a channel object
+            staffup_channel = None
+            try:
+                if self.staffup_channel_id:
+                    staffup_channel = self.bot.get_channel(self.staffup_channel_id)
+                    if staffup_channel is None:
+                        # attempt API fetch as fallback
+                        try:
+                            staffup_channel = await self.bot.fetch_channel(self.staffup_channel_id)
+                        except Exception:
+                            staffup_channel = None
+            except Exception:
+                staffup_channel = None
+
+            if staffup_channel is None:
+                logger.warning("STAFFUP_CHANNEL not found or not configured. Skipping Staffup update.")
                 return
 
             async with aiohttp.ClientSession() as session:
-                async with session.get("https://data.vatsim.net/v3/vatsim-data.json", timeout=10) as response:
+                async with session.get("https://live.env.vnas.vatsim.net/data-feed/controllers.json", timeout=10) as response:
                     if response.status == 200:
                         data = await response.json()
                         all_controllers = data["controllers"]
-
                         current_vatsim_controllers = []
+
                         for controller in all_controllers:
-                            callsign = controller.get('callsign')
-                            cid = controller.get('cid')
-                            vatsim_name = controller.get('name', 'N/A')
+                            # Only include ZDC controllers that are not observers AND are actually active
+                            if controller.get("artccId") == "ZDC" and not controller.get('isObserver', False):
+                                if not is_controller_active(controller):
+                                    # skip controllers that aren't active according to the feed
+                                    continue
+                                # normalize an 'isActive' flag on the controller dict for later checks
+                                if not controller.get('isActive'):
+                                    controller['isActive'] = True
+                                current_vatsim_controllers.append(controller)
 
-                            if isinstance(callsign, str) and callsign.startswith(tuple(watched_positions)):
-
-                                display_name = vatsim_name
-                                if cid and vatsim_name == str(cid):
-                                    fetched_name = await self.get_real_name(str(cid))
-                                    if fetched_name != str(cid):
-                                        display_name = fetched_name
-
-                                current_vatsim_controllers.append(
-                                    {
-                                        'callsign': callsign,
-                                        'name': vatsim_name,
-                                        'display_name': display_name,
-                                        'rating': controller.get('rating', -1),
-                                        'frequency': controller.get('frequency', 'N/A'),
-                                        'cid': cid,
-                                        'logon_time': controller.get('logon_time')
-                                    }
-                                )
-
-                        current_online_cids = {ctrl['cid'] for ctrl in online_zdc_controllers}
-                        vatsim_online_cids = {ctrl['cid'] for ctrl in current_vatsim_controllers}
+                        current_online_cids = {ctrl['vatsimData']['cid'] for ctrl in online_ref}
+                        vatsim_online_cids = {ctrl['vatsimData']['cid'] for ctrl in current_vatsim_controllers}
 
                         went_offline_cids = current_online_cids - vatsim_online_cids
 
                         for cid in went_offline_cids:
-                            offline_ctrl_data = next((c for c in online_zdc_controllers if c['cid'] == cid), None)
+                            offline_ctrl_data = next((c for c in online_ref if c['vatsimData']['cid'] == cid), None)
 
-                            if offline_ctrl_data and offline_ctrl_data['frequency'] != "199.998":
+                            if offline_ctrl_data and offline_ctrl_data.get('isActive', False):
                                 now_utc = datetime.now(timezone.utc)
                                 login_time = offline_ctrl_data.get('login_time_utc')
 
@@ -142,8 +140,8 @@ class Staffup(commands.Cog):
                                         try:
                                             login_time_dt = parse_vatsim_logon_time(login_time)
                                         except Exception as parse_e:
-                                            print(
-                                                f"Error parsing stored login_time string for {offline_ctrl_data['callsign']}: {parse_e}")
+                                            logger.exception(
+                                                f"Error parsing stored login_time string for {offline_ctrl_data['vatsimData']['callsign']}: {parse_e}")
                                             login_time_dt = None
                                     elif isinstance(login_time, datetime):
 
@@ -152,9 +150,8 @@ class Staffup(commands.Cog):
                                         else:
                                             login_time_dt = login_time
                                     else:
-                                        print(
-                                            f"Unexpected type for login_time_utc for {offline_ctrl_data['callsign']}: {type(login_time)}")
-
+                                        logger.warning(
+                                            f"Unexpected type for login_time_utc for {offline_ctrl_data['vatsimData']['callsign']}: {type(login_time)}")
                                 if login_time_dt:
                                     try:
                                         duration = now_utc - login_time_dt
@@ -175,17 +172,16 @@ class Staffup(commands.Cog):
                                         duration_str = " ".join(duration_parts) if duration_parts else "0s"
 
                                     except Exception as dt_e:
-                                        print(f"Error calculating duration for {offline_ctrl_data['callsign']}: {dt_e}")
+                                        logger.exception(f"Error calculating duration for {offline_ctrl_data['vatsimData']['callsign']}: {dt_e}")
                                         duration_str = "Error"
 
                                 embed = Embed(
-                                    title=f"{offline_ctrl_data['callsign']} - Offline",
+                                    title=f"{offline_ctrl_data['vatsimData']['callsign']} - Offline",
                                     color=discord.Color.red()
                                 )
-                                embed.add_field(name="Name",
-                                                value=f"{offline_ctrl_data['display_name']} ({atc_rating.get(offline_ctrl_data['rating'], 'Unknown Rating')})",
+                                embed.add_field(name="Name", value=f"{offline_ctrl_data['vatsimData']['realName']} ({offline_ctrl_data['vatsimData']['userRating']})",
                                                 inline=True)
-                                embed.add_field(name="Frequency", value=offline_ctrl_data['frequency'], inline=True)
+                                embed.add_field(name="Frequency", value=f"{offline_ctrl_data['vatsimData']['primaryFrequency']/1e6:.3f}", inline=True)
 
                                 if login_time_dt:
                                     embed.add_field(name="Logon Time", value=f"<t:{int(login_time_dt.timestamp())}:t>",
@@ -197,54 +193,86 @@ class Staffup(commands.Cog):
                                     embed.add_field(name="Session Info", value="Time data unavailable", inline=False)
 
                                 embed.set_footer(text="vZDC Controller Status")
-                                await staffup_channel.send(embed=embed)
-                                print(f"Sent offline message for: {offline_ctrl_data['callsign']}")
+                                try:
+                                    await staffup_channel.send(embed=embed)
+                                    logger.info(f"Sent offline message for: {offline_ctrl_data['vatsimData']['callsign']}")
+                                except Exception as e:
+                                    logger.exception("Failed to send staffup offline embed: %s", e)
 
-                                online_zdc_controllers = [c for c in online_zdc_controllers if c['cid'] != cid]
+                                # remove from our instance list
+                                online_ref = [c for c in online_ref if c['vatsimData']['cid'] != cid]
+                                self.online_zdc_controllers = online_ref
                         came_online_cids = vatsim_online_cids - current_online_cids
 
                         for cid in came_online_cids:
-                            online_ctrl_data = next((c for c in current_vatsim_controllers if c['cid'] == cid), None)
+                            online_ctrl_data = next((c for c in current_vatsim_controllers if c['vatsimData']['cid'] == cid), None)
 
-                            if online_ctrl_data and online_ctrl_data['frequency'] != "199.998":
-                                logon_time_str = online_ctrl_data.get('logon_time')
+                            if online_ctrl_data:
+                                logon_time_str = None
+                                for key in ("loginTime", "logon_time", "logonTime"):
+                                    val = online_ctrl_data.get(key)
+                                    if val:
+                                        logon_time_str = val
+                                        break
+
                                 if logon_time_str:
                                     try:
                                         online_ctrl_data['login_time_utc'] = parse_vatsim_logon_time(logon_time_str)
                                     except Exception:
-                                        print(
-                                            f"Could not parse VATSIM logon_time '{logon_time_str}' for CID {cid}. Using current UTC.")
-                                        online_ctrl_data['login_time_utc'] = datetime.now(
-                                            timezone.utc)
+                                        logger.warning(
+                                            f"Could not parse VATSIM login time '{logon_time_str}' for CID {cid}. Using current UTC.")
+                                        online_ctrl_data['login_time_utc'] = datetime.now(timezone.utc)
                                 else:
-                                    online_ctrl_data['login_time_utc'] = datetime.now(
-                                        timezone.utc)
+                                    online_ctrl_data['login_time_utc'] = datetime.now(timezone.utc)
 
                                 embed = Embed(
-                                    title=f"{online_ctrl_data['callsign']} - Online",
+                                    title=f"{online_ctrl_data['vatsimData']['callsign']} - Online",
                                     color=discord.Color.green()
                                 )
-                                embed.add_field(name="Name",
-                                                value=f"{online_ctrl_data['display_name']} ({atc_rating.get(online_ctrl_data['rating'], 'Unknown Rating')})",
-                                                inline=True)
-                                embed.add_field(name="Frequency", value=online_ctrl_data['frequency'], inline=True)
-                                embed.add_field(name="Logon Time",
-                                                value=f"<t:{int(online_ctrl_data['login_time_utc'].timestamp())}:t>",
-                                                inline=True)
-                                embed.set_footer(text="vZDC Controller Status")
-                                await staffup_channel.send(embed=embed)
-                                print(f"Sent online message for: {online_ctrl_data['callsign']}")
+                                embed.add_field(name="Name", value=f"{online_ctrl_data['vatsimData']['realName']} ({online_ctrl_data['vatsimData']['userRating']})")
+                                embed.add_field(name="Frequency", value=f"{online_ctrl_data['vatsimData']['primaryFrequency']/1e6:.3f}", inline=True)
+                                embed.add_field(name="Logon Time", value=f"<t:{int(online_ctrl_data['login_time_utc'].timestamp())}:t>", inline=True)
 
-                                online_zdc_controllers.append(online_ctrl_data)
+                                for pos in online_ctrl_data.get('positions', []):
+                                    try:
+                                        if pos.get('facilityId') == online_ctrl_data.get('primaryFacilityId'):
+                                            continue
+
+                                        # Only include positions that are active
+                                        if not pos.get('isActive', False):
+                                            continue
+
+                                        # Format frequency (feed gives frequency as integer in Hz in many cases)
+                                        freq = pos.get('frequency')
+                                        if isinstance(freq, (int, float)):
+                                            freq_str = f"{freq/1e6:.3f}"
+                                        else:
+                                            freq_str = str(freq) if freq is not None else "N/A"
+
+                                        label = pos.get('positionName') or pos.get('defaultCallsign') or pos.get('radioName') or pos.get('positionId')
+
+                                        embed.add_field(name="Additional Position", value=f"{pos.get('facilityName')} - {label} ({freq_str})", inline=True)
+                                    except Exception as e:
+                                        logger.exception("Error processing additional position for %s: %s", online_ctrl_data['vatsimData'].get('callsign'), e)
+
+                                embed.set_footer(text="vZDC Controller Status")
+
+                                await staffup_channel.send(embed=embed)
+                                logger.info(f"Sent online message for: {online_ctrl_data['vatsimData']['callsign']}")
+
+                                # ensure the stored entry reflects active status
+                                online_ctrl_data['isActive'] = True
+                                online_ref.append(online_ctrl_data)
+                                self.online_zdc_controllers = online_ref
 
                     else:
-                        print(f"Could not fetch VATSIM Data. HTTP Status: {response.status}")
+                        logger.warning(f"Could not fetch VATSIM Data. HTTP Status: {response.status}")
         except aiohttp.ClientError as e:
-            print(f"Aiohttp client error occurred during VATSIM data fetch: {e}")
+            logger.exception(f"Aiohttp client error occurred during VATSIM data fetch: {e}")
         except asyncio.TimeoutError:
-            print("VATSIM data fetch timed out.")
+            logger.exception("VATSIM data fetch timed out.")
         except Exception as e:
-            print(f"An unexpected error occurred in check_online_controllers: {e}")
+            logger.exception(f"An unexpected error occurred in check_online_controllers: {e}")
             traceback.print_exc()
 
 

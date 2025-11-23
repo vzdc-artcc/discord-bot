@@ -5,6 +5,7 @@ on:
     branches:
       - master
       - next
+      - rework
 
 jobs:
   build-and-push:
@@ -21,7 +22,7 @@ jobs:
         shell: bash
         run: echo "branch=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}" >> $GITHUB_OUTPUT
         id: extract_branch
-        
+
       - name: Extract commit hash
         id: commit_hash
         run: |
@@ -37,8 +38,8 @@ jobs:
 
       - name: Set version number
         run: |
-            VERSION=v${{ env.COMMIT_HASH }}
-            echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          VERSION=v${{ env.COMMIT_HASH }}
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
@@ -63,7 +64,7 @@ jobs:
         env:
           CLUSTER_ID: ${{ secrets.DO_CLUSTER_ID }}
         run: doctl kubernetes cluster kubeconfig save "$CLUSTER_ID" --set-current-context
-          
+
       - name: Update Kubernetes Deployment (MASTER)
         if: ${{ steps.extract_branch.outputs.branch == 'master' }}
         env:

@@ -1,81 +1,83 @@
-vZDC Discord Bot — README
+# Discord Bot
 
-This repo contains a Discord bot with per-guild configuration for channel and role IDs.
+This repository contains a Discord bot used across multiple guilds (servers). It supports per-guild configuration for channels, roles, and announcement types so a single bot token can be used by several servers with different settings.
 
-Quick overview
-- Secrets (tokens, API keys) stay in environment variables (.env).
-- Guild-specific settings (channel IDs, role IDs, announcement overrides) live in a JSON file: `data/guild_configs.json`.
-- Message persistence for UI items (breakboard, role selectors) is saved per-guild under `data/` as `*_message_id_<guild_id>.json`.
+Key files and structure
 
-Per-guild configuration (data/guild_configs.json)
-- Top-level keys are guild IDs (strings).
-- Each guild object can contain `channels`, `roles`, and `announcement_types` mappings.
+- `bot.py` - main bot entrypoint.
+- `config.py` - configuration loader; reads environment secrets and a `data/guild_configs.json` for per-guild settings.
+- `extensions/` - bot cogs / extensions that implement functionality (breakboard, impromptu, staffup, etc.).
+- `data/` - runtime data and per-guild persisted files (e.g. role selector message ids, notification message ids, `guild_configs.json`).
+- `requirements.txt` / `pyproject.toml` - dependencies.
 
-Example (snippet):
+Per-guild configuration
+
+`config.py` expects a JSON file at `data/guild_configs.json` (path can be overridden with the `GUILD_CONFIG_FILE` env var). The file maps guild IDs (as strings) to a configuration object with the following shape:
 
 {
-  "1274456840033407093": {
-    "channels": {
-      "staffup_channel": 1405290009212358777,
-      "break_board_channel_id": 1405289922985988206,
-      "impromptu_channel_id": 1405304886970679436,
-      "general_announcement_channel_id": 1438253307553517588,
-      "event_announcement_channel_id": 1438253370317209741
-    },
-    "roles": {
-      "gnd_unrestricted": 1437948612549152925,
-      "gnd_tier1": 1437949560495280262
-    }
+  "<guild_id>": {
+    "channels": { ... },
+    "roles": { ... },
+    "announcement_types": { ... }
   }
 }
 
-Notes:
-- Any keys omitted fall back to defaults (the bot will skip features if channels/roles aren’t configured).
-- You can override announcement channels per type using `announcement_types` inside a guild entry.
+The available channel keys are:
+- `staffup_channel`
+- `break_board_channel_id`
+- `impromptu_channel_id`
+- `general_announcement_channel_id`
+- `event_announcement_channel_id`
+- `websystem_announcement_channel_id`
+- `training_announcement_channel_id`
+- `facility_announcement_channel_id`
 
-Environment variables (keep these secret)
-- DISCORD_TOKEN — required (bot token)
-- API_SECRET_KEY — used by the internal HTTP API
-- VATUSA_API_KEY, VATUSA_API_URL, etc.
-- Optional: GUILD_CONFIG_FILE — path to per-guild JSON (defaults to `data/guild_configs.json`).
+The available role keys are:
+- `gnd_unrestricted`, `gnd_tier1`, `twr_unrestricted`, `twr_tier1`, `app_unrestricted`, `pct`, `center`
+- `impromptu_ctr`, `impromptu_app`, `impromptu_twr`, `impromptu_gnd`
 
-Security: rotate your bot token immediately if it has been exposed.
+Example
 
-Run locally (fish shell example)
+A sample guild config for the guild `1274456840033407093` is already provided in `data/guild_configs.json`.
+
+Keeping secrets safe
+
+Keep API keys and the Discord token in environment variables (e.g. a `.env` file). Do not store tokens or secret API keys in `guild_configs.json`.
+
+Running the bot (development)
+
+1. Create a virtual environment and install dependencies:
 
 ```bash
-# create and activate a venv (fish)
 python -m venv .venv
 source .venv/bin/activate.fish
 pip install -r requirements.txt
+```
 
-# create or edit data/guild_configs.json with your guild/channel/role IDs
-# ensure .env contains DISCORD_TOKEN and other secrets
+2. Create a `.env` with the required secrets (see `.env.example` or `config.py` variables):
+
+- `DISCORD_TOKEN` - the bot token (keep secret)
+- `API_SECRET_KEY` (optional)
+- `VATUSA_API_KEY`, `VATUSA_API_URL` (optional)
+- `GUILD_CONFIG_FILE` (optional) to override the default `data/guild_configs.json`
+
+3. Run the bot:
+
+```bash
 python bot.py
 ```
 
-API endpoints
-- The announcement endpoints accept either `channel_id` (explicit override) or `guild_id` (the server ID). When `guild_id` is provided the bot will resolve the configured channel for the message type in that guild.
-- Use X-API-Key header with your API_SECRET_KEY when calling the internal API.
+Notes
 
-Testing announcements (example payload)
+- The bot stores per-guild message IDs under `data/` with filenames like `breakboard_selector_message_id_<guild_id>.json` and `notification_message_id_<guild_id>.json` so the same bot can operate in multiple guilds without message ID collisions.
+- If you need to add a new guild, add its config to `data/guild_configs.json` following the structure above, or use the `save_guild_config` helper in `config.py` to write one programmatically.
 
-POST /announcements
-Headers: X-API-Key: <API_SECRET_KEY>
-Body (JSON):
-{
-  "message_type": "event",
-  "title": "Test",
-  "body": "Hello",
-  "guild_id": 1274456840033407093
-}
+Troubleshooting
 
-Admin & future improvements
-- Consider adding an admin command to modify per-guild config from Discord.
-- Consider moving per-guild storage to a small database for concurrency.
+- If the bot reports a failed login, verify `DISCORD_TOKEN` is set correctly in your environment.
+- If the bot can't find channels or roles, ensure the IDs in `data/guild_configs.json` are correct and that the bot has the necessary permissions in that guild.
 
-If you want, I can:
-- Add a small admin command for in-guild config management, or
-- Add a short example admin workflow and automated tests.
+License
 
+MIT
 

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any
 
 from extensions.api_server import app, api_key_required
-from config import ANNOUNCEMENT_TYPES
+import config as cfg
 from utils.events import parse_position
 from utils.vatsim import parse_vatsim_logon_time
 
@@ -83,11 +83,17 @@ def post_event_position_posting():
         times_str = ""
 
     # Resolve announcement type properties
-    # Use the existing announcement config for event postings
-    post_conf = ANNOUNCEMENT_TYPES.get("event-position-posting", {})
+    post_conf = cfg.ANNOUNCEMENT_TYPES.get("event-position-posting", {})
     color_val = post_conf.get("color")
     title_prefix = post_conf.get("title_prefix", "Event Posting:")
-    target_channel_id = channel_override or post_conf.get("channel_id")
+
+    # Resolve target channel via explicit override or guild config (if provided)
+    guild_id = _safe_get(data, "guild_id")
+    target_channel_id = None
+    if channel_override:
+        target_channel_id = int(channel_override)
+    elif guild_id is not None:
+        target_channel_id = cfg.resolve_announcement_target_channel(guild_id, "event-position-posting")
 
     # Build embed
     embed_title = f"{title_prefix} {event_name}".strip()

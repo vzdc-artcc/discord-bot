@@ -6,9 +6,10 @@ import discord
 from discord.ext import commands, tasks
 from bot import logger
 from discord import Embed
-from config import STAFFUP_CHANNEL
+import config as cfg
 
 from utils.vatsim import parse_vatsim_logon_time
+
 
 online_zdc_controllers: list = []
 
@@ -53,8 +54,6 @@ class Staffup(commands.Cog):
         self.bot = bot
         # instance storage for online controllers
         self.online_zdc_controllers: list = []
-        # configured channel id (from config.STAFFUP_CHANNEL)
-        self.staffup_channel_id = STAFFUP_CHANNEL
         logger.info("Staffup extension initialized.")
 
     @commands.Cog.listener()
@@ -83,24 +82,6 @@ class Staffup(commands.Cog):
 
         try:
             await self.bot.wait_until_ready()
-
-            # Resolve configured channel ID to a channel object
-            staffup_channel = None
-            try:
-                if self.staffup_channel_id:
-                    staffup_channel = self.bot.get_channel(self.staffup_channel_id)
-                    if staffup_channel is None:
-                        # attempt API fetch as fallback
-                        try:
-                            staffup_channel = await self.bot.fetch_channel(self.staffup_channel_id)
-                        except Exception:
-                            staffup_channel = None
-            except Exception:
-                staffup_channel = None
-
-            if staffup_channel is None:
-                logger.warning("STAFFUP_CHANNEL not found or not configured. Skipping Staffup update.")
-                return
 
             async with aiohttp.ClientSession() as session:
                 async with session.get("https://live.env.vnas.vatsim.net/data-feed/controllers.json", timeout=10) as response:
@@ -193,11 +174,25 @@ class Staffup(commands.Cog):
                                     embed.add_field(name="Session Info", value="Time data unavailable", inline=False)
 
                                 embed.set_footer(text="vZDC Controller Status")
-                                try:
-                                    await staffup_channel.send(embed=embed)
-                                    logger.info(f"Sent offline message for: {offline_ctrl_data['vatsimData']['callsign']}")
-                                except Exception as e:
-                                    logger.exception("Failed to send staffup offline embed: %s", e)
+
+                                # send to all configured staffup channels across guilds
+                                for guild in self.bot.guilds:
+                                    channel_id = cfg.get_channel_for_guild(guild.id, "staffup_channel")
+                                    if not channel_id:
+                                        continue
+                                    staffup_channel = self.bot.get_channel(channel_id)
+                                    if staffup_channel is None:
+                                        try:
+                                            staffup_channel = await self.bot.fetch_channel(channel_id)
+                                        except Exception:
+                                            staffup_channel = None
+                                    if staffup_channel is None:
+                                        continue
+                                    try:
+                                        await staffup_channel.send(embed=embed)
+                                        logger.info(f"Sent offline message for: {offline_ctrl_data['vatsimData']['callsign']} to guild {guild.id}")
+                                    except Exception as e:
+                                        logger.exception("Failed to send staffup offline embed: %s", e)
 
                                 # remove from our instance list
                                 online_ref = [c for c in online_ref if c['vatsimData']['cid'] != cid]
@@ -257,8 +252,24 @@ class Staffup(commands.Cog):
 
                                 embed.set_footer(text="vZDC Controller Status")
 
-                                await staffup_channel.send(embed=embed)
-                                logger.info(f"Sent online message for: {online_ctrl_data['vatsimData']['callsign']}")
+                                # send to all configured staffup channels across guilds
+                                for guild in self.bot.guilds:
+                                    channel_id = cfg.get_channel_for_guild(guild.id, "staffup_channel")
+                                    if not channel_id:
+                                        continue
+                                    staffup_channel = self.bot.get_channel(channel_id)
+                                    if staffup_channel is None:
+                                        try:
+                                            staffup_channel = await self.bot.fetch_channel(channel_id)
+                                        except Exception:
+                                            staffup_channel = None
+                                    if staffup_channel is None:
+                                        continue
+                                    try:
+                                        await staffup_channel.send(embed=embed)
+                                        logger.info(f"Sent online message for: {online_ctrl_data['vatsimData']['callsign']} to guild {guild.id}")
+                                    except Exception as e:
+                                        logger.exception("Failed to send staffup online embed: %s", e)
 
                                 # ensure the stored entry reflects active status
                                 online_ctrl_data['isActive'] = True

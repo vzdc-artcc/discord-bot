@@ -16,6 +16,7 @@ def handle_announcements():
       - body: str
     Optional:
       - channel_id: int (overrides configured channel)
+      - guild_id: int (resolve configured channel for the specified guild)
       - author_name, author_rating, author_staff_position, banner_url, event_id
 
     The endpoint will schedule a coroutine on the bot event loop via
@@ -44,6 +45,7 @@ def handle_announcements():
     title = data.get("title")
     body = data.get("body")
     channel_override = data.get("channel_id")
+    guild_id = data.get("guild_id")
 
     author_name = data.get("author_name")
     author_rating = data.get("author_rating")
@@ -58,7 +60,16 @@ def handle_announcements():
         return jsonify({"error": f"Unsupported message_type: {message_type}"}), 400
 
     announce_config = cfg.ANNOUNCEMENT_TYPES[message_type]
-    target_channel_id = channel_override or announce_config.get("channel_id")
+    # Resolve target channel: prefer explicit channel override, then guild-config, then announce_config (which contains channel_key)
+    target_channel_id = None
+    if channel_override:
+        target_channel_id = int(channel_override)
+    elif guild_id is not None:
+        target_channel_id = cfg.resolve_announcement_target_channel(guild_id, message_type)
+    else:
+        # as a last resort, try to resolve announcement type via 0 (no guild) which will return None
+        target_channel_id = None
+
     color_value = announce_config.get("color")
     title_prefix = announce_config.get("title_prefix", "")
 
@@ -96,9 +107,14 @@ def handle_announcements():
             "message_type": message_type,
             "target_channel_id": target_channel_id,
             "event_id": event_id,
+            "guild_id": guild_id,
         }
         logger.info(f"Dry-run announcement prepared (type={message_type}): {embed_payload}")
         return jsonify({"status": "dry_run", "payload": embed_payload}), 200
+
+    if target_channel_id is None:
+        logger.info("Failed to determine target channel for announcement")
+        return jsonify({"error": "Target channel could not be determined; provide channel_id or guild_id with configuration."}), 400
 
     # Prepare coroutine to send message
     async def _send():

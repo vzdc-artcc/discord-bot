@@ -5,9 +5,12 @@ from discord.ext import commands
 import json
 import os
 from bot import logger
-from config import IMPROMPTU_CHANNEL_ID, IMPROMPTU_ROLE_MAP
+import config as cfg
 
 ROLE_SELECTOR_MESSAGE_ID_FILE = f"{os.getcwd()}/data/impromptu_selector_message_id.json"
+
+def _role_selector_file_for_guild(guild_id: int):
+    return f"{os.getcwd()}/data/impromptu_selector_message_id_{guild_id}.json"
 
 class RoleSelectionButtons(discord.ui.View):
     def __init__(self, bot):
@@ -106,25 +109,25 @@ class RoleSelectionButtons(discord.ui.View):
 
     @discord.ui.button(label="Ground", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_gnd")
     async def impromptu_gnd_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Impromptu Ground", IMPROMPTU_ROLE_MAP["impromptu_gnd"])
+        await self.assign_or_remove_role(interaction, "Impromptu Ground", cfg.get_role_for_guild(interaction.guild.id, "impromptu_gnd"))
 
     @discord.ui.button(label="Tower", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_twr")
     async def impromptu_twr_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Impromptu Tower", IMPROMPTU_ROLE_MAP["impromptu_twr"])
+        await self.assign_or_remove_role(interaction, "Impromptu Tower", cfg.get_role_for_guild(interaction.guild.id, "impromptu_twr"))
 
     @discord.ui.button(label="Approach", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_app")
     async def impromptu_app_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Impromptu Approach", IMPROMPTU_ROLE_MAP["impromptu_app"])
+        await self.assign_or_remove_role(interaction, "Impromptu Approach", cfg.get_role_for_guild(interaction.guild.id, "impromptu_app"))
 
     @discord.ui.button(label="Center", style=discord.ButtonStyle.secondary, custom_id="role_impromptu_ctr")
     async def impromptu_ctr_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.assign_or_remove_role(interaction, "Impromptu Center", IMPROMPTU_ROLE_MAP["impromptu_ctr"])
+        await self.assign_or_remove_role(interaction, "Impromptu Center", cfg.get_role_for_guild(interaction.guild.id, "impromptu_ctr"))
 
     async def remove_existing_roles(self, interaction: discord.Interaction, exclude_role_id):
         member = interaction.user
         guild = interaction.guild
         # Build list of roles (actual Role objects) to remove, excluding the role we are about to toggle.
-        roles_to_remove = [guild.get_role(rid) for rid in IMPROMPTU_ROLE_MAP.values() if guild.get_role(rid) in member.roles and rid != exclude_role_id]
+        roles_to_remove = [guild.get_role(rid) for rid in [cfg.get_role_for_guild(guild.id, k) for k in ("impromptu_ctr","impromptu_app","impromptu_twr","impromptu_gnd")] if rid and guild.get_role(rid) in member.roles and rid != exclude_role_id]
         if roles_to_remove:
             try:
                 await member.remove_roles(*roles_to_remove)
@@ -143,22 +146,25 @@ class ImpromptuSelector(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.message_id = None
-        self.channel_id = IMPROMPTU_CHANNEL_ID
+        self.channel_id = None
 
-        os.makedirs(os.path.dirname(ROLE_SELECTOR_MESSAGE_ID_FILE), exist_ok=True)
+        # ensure data dir
+        os.makedirs(os.path.join(os.getcwd(), "data"), exist_ok=True)
+        # we store message ids per guild now
+        self.message_id = None
 
-        if os.path.exists(ROLE_SELECTOR_MESSAGE_ID_FILE):
-            with open(ROLE_SELECTOR_MESSAGE_ID_FILE, "r") as f:
-                data = json.load(f)
-                self.message_id = data.get("message_id")
-                if data.get("channel_id") != self.channel_id:
-                    logger.warning("Role selector channel ID mismatch in saved data. Resetting.")
-                    self.message_id = None
-
-    def save_message_id(self, message_id: int):
+    def save_message_id(self, message_id: int, channel_id: int):
         self.message_id = message_id
-        with open(ROLE_SELECTOR_MESSAGE_ID_FILE, "w") as f:
-            json.dump({"message_id": message_id, "channel_id": self.channel_id}, f)
+        try:
+            guild_id = channel_id and getattr(self.bot.get_channel(channel_id).guild, "id", None)
+            if guild_id:
+                path = _role_selector_file_for_guild(guild_id)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w") as f:
+                    json.dump({"message_id": message_id, "channel_id": channel_id}, f)
+        except Exception:
+            # best-effort persistence
+            pass
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -166,24 +172,40 @@ class ImpromptuSelector(commands.Cog):
             return
 
         logger.info("RoleSelector cog ready.")
-        channel = self.bot.get_channel(self.channel_id)
-        if not channel:
-            logging.error(f"Role Selector channel with ID {self.channel_id} not found.")
-            return
+        for guild in self.bot.guilds:
+            guild_cfg = cfg.get_guild_config(guild.id)
+            channel_id = guild_cfg.get_channel("impromptu_channel_id")
+            if not channel_id:
+                logger.info(f"No role selector channel configured for guild {guild.id} ({guild.name}), skipping.")
+                continue
 
-        if self.message_id:
-            try:
-                message = await channel.fetch_message(self.message_id)
-                self.bot.add_view(RoleSelectionButtons(self.bot), message_id=message.id)
-                logger.info(f"Found existing role selector message (ID: {self.message_id}). Re-attaching view.")
-                return
-            except discord.NotFound:
-                logger.info("Previous role selector message not found. Sending a new one.")
-                self.message_id = None
-            except discord.Forbidden:
-                logger.exception(f"Bot doesn't have permission to fetch message {self.message_id} in channel {self.channel_id}.")
-                self.message_id = None
-        await self.send_initial_embed_with_buttons(channel)
+            channel = self.bot.get_channel(channel_id) or await self.bot.fetch_channel(channel_id)
+            if not channel:
+                logging.error(f"Role Selector channel with ID {channel_id} not found.")
+                continue
+
+            # check per-guild saved message id
+            msg_file = _role_selector_file_for_guild(guild.id)
+            saved_message_id = None
+            if os.path.exists(msg_file):
+                try:
+                    with open(msg_file, "r") as f:
+                        data = json.load(f)
+                        saved_message_id = data.get("message_id")
+                except Exception:
+                    saved_message_id = None
+
+            if saved_message_id:
+                try:
+                    message = await channel.fetch_message(saved_message_id)
+                    self.bot.add_view(RoleSelectionButtons(self.bot), message_id=message.id)
+                    logger.info(f"Found existing role selector message (ID: {saved_message_id}) for guild {guild.id}. Re-attaching view.")
+                    return
+                except discord.NotFound:
+                    logger.info("Previous role selector message not found. Sending a new one.")
+                except discord.Forbidden:
+                    logger.exception(f"Bot doesn't have permission to fetch message {saved_message_id} in channel {channel_id}.")
+            await self.send_initial_embed_with_buttons(channel)
 
     async def send_initial_embed_with_buttons(self, channel: discord.TextChannel):
         embed = discord.Embed(
@@ -200,8 +222,12 @@ class ImpromptuSelector(commands.Cog):
 
         view = RoleSelectionButtons(self.bot)
         message = await channel.send(embed=embed, view=view)
-        self.save_message_id(message.id)
+        try:
+            self.save_message_id(message.id, channel.id)
+        except Exception:
+            pass
         logger.info(f"Sent new role selector message (ID: {message.id}) in channel {channel.name}.")
+
 
 async def setup(bot):
     await bot.add_cog(ImpromptuSelector(bot))

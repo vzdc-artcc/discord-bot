@@ -21,10 +21,6 @@ def _truncate(text: Optional[str], max_len: int = MAX_FIELD_LENGTH) -> str:
 
 
 def _format_footer(author_id: Optional[int], message_id: Optional[int], ts: Optional[datetime]) -> str:
-    """Format footer like: "Author: <id> | Message ID: <id>•<discord timestamp>".
-
-    Use Discord's time formatting (<t:unix:f>) so clients show "Today at ..." or "Yesterday at ..." when appropriate.
-    """
     parts = []
     if author_id is not None:
         parts.append(f"Author: {author_id}")
@@ -335,6 +331,7 @@ class DiscordLogger(commands.Cog):
         if footer_text:
             embed.set_footer(text=footer_text)
         await self._safe_send(channel, embed=embed)
+
 
     @commands.Cog.listener()
     async def on_bulk_message_delete(self, messages: List[discord.Message]):

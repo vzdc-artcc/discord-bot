@@ -6,7 +6,7 @@ import shutil
 import time
 from dotenv import load_dotenv
 
-from bot import logger
+
 
 load_dotenv()
 
@@ -154,7 +154,6 @@ def _load_guild_configs_from_disk():
         }
         path.write_text(f"{text}")
         _guild_configs = {}
-        logger.info(f"Created new guild config file at {GUILD_CONFIG_FILE}")
         return
 
     try:

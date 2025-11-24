@@ -4,9 +4,9 @@ import pathlib
 import discord
 import shutil
 import time
+import logging
+import ast
 from dotenv import load_dotenv
-
-
 
 load_dotenv()
 
@@ -95,9 +95,11 @@ class GuildConfig:
 def _load_guild_configs_from_disk():
     global _guild_configs
     path = pathlib.Path(GUILD_CONFIG_FILE)
+    logging.getLogger(__name__).info("Loading guild configs from %s", path)
     if not path.exists():
         # create a default empty file if missing
         path.parent.mkdir(parents=True, exist_ok=True)
+        # Default data to seed the guild config file (valid JSON)
         text = {
                   "1441276520927596587": {
                     "channels": {
@@ -143,7 +145,7 @@ def _load_guild_configs_from_disk():
                       "twr_tier1": 1348473059887288542,
                       "app_unrestricted": 1348472832363073577,
                       "pct": 1348473122248069140,
-                      "center": 1348473192909508619,
+                      "center": 1441546087683854397,
                       "impromptu_ctr": 816170273619312661,
                       "impromptu_app": 816170152180580353,
                       "impromptu_twr": 816170084958470145,
@@ -152,12 +154,46 @@ def _load_guild_configs_from_disk():
                     "announcement_types": {}
                   }
         }
-        path.write_text(f"{text}")
-        _guild_configs = {text}
+
+        # Write valid JSON to disk
+        try:
+            path.write_text(json.dumps(text, indent=2))
+        except Exception:
+            # If writing fails, propagate so callers can handle it
+            raise
+
+        # Populate in-memory _guild_configs with GuildConfig objects
+        loaded = {}
+        for gid_str, cfg in text.items():
+            try:
+                gid = int(gid_str)
+                loaded[gid] = GuildConfig(gid, cfg)
+            except Exception:
+                # Skip malformed entries
+                continue
+        _guild_configs = loaded
+        logging.getLogger(__name__).info("Created default guild config file and loaded %d guild(s)", len(_guild_configs))
         return
 
     try:
-        raw = json.loads(path.read_text())
+        raw_text = path.read_text()
+        try:
+            raw = json.loads(raw_text)
+        except Exception as e_json:
+            # Attempt to recover from a Python dict repr (common when other tooling wrote the file)
+            logging.getLogger(__name__).warning("Failed to parse %s as JSON: %s; attempting Python literal_eval fallback", path, e_json)
+            try:
+                raw = ast.literal_eval(raw_text)
+                # Normalise: write back valid JSON so future loads succeed
+                try:
+                    path.write_text(json.dumps(raw, indent=2))
+                except Exception:
+                    logging.getLogger(__name__).exception("Failed to rewrite %s as JSON after literal_eval recovery", path)
+            except Exception as e_eval:
+                logging.getLogger(__name__).exception("Failed to parse %s as JSON or Python literal: %s", path, e_eval)
+                _guild_configs = {}
+                return
+
         # Expecting top-level mapping: guild_id -> config
         loaded = {}
         for gid_str, cfg in raw.items():
@@ -168,6 +204,7 @@ def _load_guild_configs_from_disk():
                 # skip malformed keys
                 continue
         _guild_configs = loaded
+        logging.getLogger(__name__).info("Loaded %d guild config(s) from %s", len(_guild_configs), path)
     except Exception:
         _guild_configs = {}
 

@@ -1,0 +1,94 @@
+{
+  "vZDC-A-01F": {
+    "key": "vZDC-A-01F",
+    "title": "vZDC-A-01F | General Operating & Administrative Policy",
+    "pdf_url": "https://vzdc.org/publications/cmesojx9q02hnrm01hq1i0zn4",
+    "description": "General Operating & Administrative Policy (Effective: 26 August 2025)",
+    "aliases": ["general policy", "administrative policy"]
+  },
+  "vZDC-A-02E": {
+    "key": "vZDC-A-02E",
+    "title": "vZDC-A-02E | Training Program Operation & Management",
+    "pdf_url": "https://vzdc.org/publications/cmfhl7qfn004kjs01kg2ha9zp",
+    "description": "Training Program Operation & Management (Effective: 15 September 2025)",
+    "aliases": ["training", "training program"]
+  },
+  "BWI": {
+    "key": "BWI",
+    "title": "BWI | Baltimore-Washington Tower SOP",
+    "pdf_url": "https://vzdc.org/publications/cm0vsxvbu04cxorsjfbsbhdyy",
+    "description": "Baltimore-Washington Tower Standard Operating Procedures & Reference",
+    "aliases": ["baltimore", "bwi tower"]
+  },
+  "DCA": {
+    "key": "DCA",
+    "title": "DCA | Washington National Tower SOP",
+    "pdf_url": "https://vzdc.org/publications/cm0vsyr9u04czorsjy00kob2w",
+    "description": "Washington National Tower Standard Operating Procedures & Reference",
+    "aliases": ["national", "washington"]
+  },
+  "IAD": {
+    "key": "IAD",
+    "title": "IAD | Washington Dulles Tower SOP",
+    "pdf_url": "https://vzdc.org/publications/cm0vszs0h04d2orsjwdau551z",
+    "description": "Washington Dulles Tower Standard Operating Procedures & Reference",
+    "aliases": ["dulles"]
+  },
+  "RIC": {
+    "key": "RIC",
+    "title": "RIC | Richmond Tower SOP",
+    "pdf_url": "https://vzdc.org/publications/cm0vt1br204d6orsjkx3h38gx",
+    "description": "Richmond Tower Standard Operating Procedures & Reference",
+    "aliases": ["richmond"]
+  },
+  "PCT": {
+    "key": "PCT",
+    "title": "PCT | Potomac Consolidated TRACON SOP",
+    "pdf_url": "https://vzdc.org/publications/cmcmd6vsw0000mo019zfvwd8c",
+    "description": "Potomac Consolidated TRACON SOP (Effective: 7 July 2025)",
+    "aliases": ["potomac", "tracon"]
+  },
+  "vZDC-ZDC-P-01H": {
+    "key": "vZDC-ZDC-P-01H",
+    "title": "vZDC-ZDC-P-01H | Washington Center SOP",
+    "pdf_url": "https://vzdc.org/publications/cmavmveof01vao201wtuj76ro",
+    "description": "Washington Center SOP (Effective: 22 September 2025)",
+    "aliases": ["center sop", "zdc sop"]
+  },
+  "vZDC-C-01D": {
+    "key": "vZDC-C-01D",
+    "title": "vZDC-C-01D | Organization Chart",
+    "pdf_url": "https://vzdc.org/publications/cmamoymnd009uo2014ttxov98",
+    "description": "Organization Chart",
+    "aliases": ["org chart"]
+  },
+    "vZDC-PCT-C-01": {
+    "key": "vZDC-PCT-C-01",
+    "title": "vZDC-PCT-C-01 | Chesapeake Area Charts",
+    "pdf_url": "https://vzdc.org/publications/cmcm2kbbi03xeo501p3kt0wyh",
+    "description": "Chesapeake Area Charts",
+    "aliases": ["chp chart"]
+  },
+    "vZDC-PCT-C-02": {
+    "key": "vZDC-PCT-C-02",
+    "title": "vZDC-PCT-C-02 | James River Area Charts",
+    "pdf_url": "https://vzdc.org/publications/cmcm9a7hp03xlo5019qxya86z",
+    "description": "James River Area Charts",
+    "aliases": ["jrv chart"]
+  },
+    "vZDC-PCT-C-03": {
+    "key": "vZDC-PCT-C-03",
+    "title": "vZDC-PCT-C-03 | Mount Vernon Area Charts",
+    "pdf_url": "https://vzdc.org/publications/cmcmagoko03xoo5018kjrcu4q",
+    "description": "Mount Vernon Area Charts",
+    "aliases": ["mtv chart"]
+  },
+    "vZDC-PCT-C-04": {
+    "key": "vZDC-PCT-C-04",
+    "title": "vZDC-PCT-C-04 | Shenandoah Area Charts",
+    "pdf_url": "https://vzdc.org/publications/cmcmcna4h03xro5016vb4ahph",
+    "description": "Shenandoah Area Charts",
+    "aliases": ["shd chart"]
+  }
+}
+

@@ -8,6 +8,9 @@ import inspect
 import requests
 import re
 from utils.awc_api_helpers import get_category_color, qnh_hpa_to_inhg
+import json
+import difflib
+from typing import List, Dict, Any
 
 
 def _find_first_key(obj, keys):
@@ -39,6 +42,10 @@ class Commands(commands.Cog):
         self.bot = bot
         self.logger = logging.getLogger(__name__)
         self._synced = False
+        # publications will be loaded from data/publications.json
+        self.publications: Dict[str, Dict[str, Any]] = {}
+        self._search_index: List[Dict[str, Any]] = []
+        self._load_publications()
 
     weather_group = app_commands.Group(name="weather", description="Weather Tools")
 
@@ -422,6 +429,141 @@ class Commands(commands.Cog):
 
         embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild and guild.icon else None)
         await interaction.followup.send(embed=embed)
+
+    # -------------------- PUBLICATIONS (/pub) --------------------
+    def _load_publications(self):
+        """Load publication metadata from data/publications.json into memory and build a simple search index."""
+        try:
+            base = os.path.dirname(os.path.dirname(__file__))
+            data_path = os.path.join(base, "data", "publications.json")
+            if not os.path.exists(data_path):
+                # Fallback to project root data path
+                data_path = os.path.join(os.getcwd(), "data", "publications.json")
+
+            with open(data_path, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+
+            if not isinstance(raw, dict):
+                self.logger.warning("publications.json does not contain a top-level object/dict; ignoring")
+                return
+
+            pubs = {}
+            index = []
+            for key, val in raw.items():
+                try:
+                    entry = dict(val)
+                    entry_key = str(entry.get("key", key)).strip()
+                    entry["key"] = entry_key
+                    title = str(entry.get("title", "")).strip()
+                    pdf = str(entry.get("pdf_url", "")).strip()
+                    # basic url validation
+                    if not pdf.startswith("https://"):
+                        self.logger.warning("Publication %s: pdf_url does not start with https://: %s", entry_key, pdf)
+                    pubs[entry_key.lower()] = entry
+
+                    # index searchable tokens
+                    tokens = [entry_key.lower(), title.lower()]
+                    for a in entry.get("aliases", []) or []:
+                        tokens.append(str(a).lower())
+
+                    index.append({"key": entry_key, "title": title, "pdf_url": pdf, "tokens": tokens})
+                except Exception:
+                    self.logger.exception("Failed to process publication entry %s", key)
+
+            self.publications = pubs
+            self._search_index = index
+            self.logger.debug("Loaded %d publications", len(self.publications))
+        except FileNotFoundError:
+            self.logger.warning("data/publications.json not found; publications commands will be disabled")
+        except Exception:
+            self.logger.exception("Failed to load publications.json")
+
+    def _find_publications(self, query: str) -> List[Dict[str, Any]]:
+        """Return a list of matching publication entries for the query.
+
+        Matching strategy:
+        - case-insensitive exact match on key
+        - substring match against key/title/aliases
+        - difflib close matches on keys if nothing else found
+        """
+        q = (query or "").strip().lower()
+        if not q:
+            return []
+
+        # exact key match
+        if q in self.publications:
+            e = self.publications[q]
+            return [e]
+
+        matches = []
+        # substring search
+        for item in self._search_index:
+            if any(q in t for t in item.get("tokens", [])):
+                matches.append({"key": item["key"], "title": item["title"], "pdf_url": item["pdf_url"]})
+
+        if matches:
+            return matches
+
+        # fuzzy close matches on keys
+        keys = list(self.publications.keys())
+        close = difflib.get_close_matches(q, keys, n=5, cutoff=0.6)
+        for k in close:
+            matches.append(self.publications[k])
+        return matches
+
+    @app_commands.command(name="pub", description="Get a link to a vZDC publication PDF by key or name.")
+    async def pub(self, interaction: discord.Interaction, query: str):
+        """Slash command to look up publications by key/title/alias and return a PDF link or candidate list."""
+        await interaction.response.defer(ephemeral=True)
+        try:
+            if not self.publications:
+                await interaction.followup.send("No publications are currently loaded.", ephemeral=True)
+                return
+
+            q = (query or "").strip()
+            if not q:
+                await interaction.followup.send("Please provide a publication key or name. Example: `/pub training`", ephemeral=True)
+                return
+
+            matches = self._find_publications(q)
+
+            if not matches:
+                await interaction.followup.send(
+                    f"No publications found for `{q}`. Try a shorter query or the publication key."
+                    + "\nIf you believe this is an error, contact staff.",
+                    ephemeral=True,
+                )
+                return
+
+            # single exact or unique match -> public embed
+            if len(matches) == 1:
+                m = matches[0]
+                embed = discord.Embed(title=m.get("title") or m.get("key"), color=discord.Color.green())
+                if m.get("description"):
+                    embed.description = m.get("description")
+                pdf = m.get("pdf_url")
+                if pdf:
+                    embed.add_field(name="PDF", value=f"[Open PDF]({pdf})", inline=False)
+                embed.set_footer(text=m.get("key") or "vZDC")
+                # send publicly
+                await interaction.followup.send(embed=embed, ephemeral=False)
+                return
+
+            # multiple candidates -> ephemeral list with instructions
+            limit = 5
+            total = len(matches)
+            items = matches[:limit]
+            lines = []
+            for it in items:
+                lines.append(f"{it.get('key')} — {it.get('title')}")
+
+            more = "" if total <= limit else f"\nShowing top {limit} of {total} results."
+            msg = "Multiple publications matched your query:\n" + "\n".join(lines) + more + "\nUse `/pub <key>` to get a direct link to a publication."
+            await interaction.followup.send(msg, ephemeral=True)
+
+        except Exception as e:
+            self.logger.exception("/pub command failed: %s", e)
+            await interaction.followup.send("An internal error occurred while searching publications.", ephemeral=True)
 
     # -------------------- registration helpers --------------------
     async def setup_hook(self):

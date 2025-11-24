@@ -2,6 +2,8 @@ import os
 import json
 import pathlib
 import discord
+import shutil
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -218,7 +220,30 @@ def save_guild_config(guild_id: int, data: dict):
     except Exception:
         raw = {}
     raw[str(int(guild_id))] = data
-    path.write_text(json.dumps(raw, indent=2))
+
+    # Create a timestamped backup of the existing file to guard against accidental data loss
+    try:
+        if path.exists():
+            bak_name = f"{path.name}.bak.{int(time.time())}"
+            bak_path = path.parent.joinpath(bak_name)
+            shutil.copy2(path, bak_path)
+    except Exception:
+        # Don't fail the save if backup can't be created; continue to attempt save
+        pass
+
+    # Atomic write: write to a temp file then replace the original
+    try:
+        tmp_path = path.parent.joinpath(path.name + ".tmp")
+        tmp_path.write_text(json.dumps(raw, indent=2))
+        # Use replace/rename which is atomic on most OSes
+        tmp_path.replace(path)
+    except Exception:
+        # If atomic replace fails, fall back to direct write
+        try:
+            path.write_text(json.dumps(raw, indent=2))
+        except Exception:
+            # At this point the write failed; leave things as-is and re-raise
+            raise
     reload_guild_configs()
 
 

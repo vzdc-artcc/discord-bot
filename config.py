@@ -34,6 +34,7 @@ _DEFAULT_GUILD_CONFIG = {
         "websystem_announcement_channel_id": None,
         "training_announcement_channel_id": None,
         "facility_announcement_channel_id": None,
+        "welcome_channel_id": None,
     },
     "roles": {
         "gnd_unrestricted": None,

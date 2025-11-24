@@ -18,7 +18,8 @@ VATUSA_API_KEY = os.getenv("VATUSA_API_KEY")
 VATUSA_API_URL = os.getenv("VATUSA_API_URL")
 
 # Where per-guild configs are stored
-GUILD_CONFIG_FILE = os.getenv("GUILD_CONFIG_FILE", os.path.join(os.getcwd(), "data", "guild_configs.json"))
+MAIN_DIRECTORY = os.getcwd()
+GUILD_CONFIG_FILE = os.getenv("GUILD_CONFIG_FILE", os.path.join(MAIN_DIRECTORY, "data", "guild_configs.json"))
 
 # Internal cache for loaded guild configs
 _guild_configs = {}

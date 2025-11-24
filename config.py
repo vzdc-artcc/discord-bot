@@ -145,7 +145,7 @@ def _load_guild_configs_from_disk():
                       "twr_tier1": 1348473059887288542,
                       "app_unrestricted": 1348472832363073577,
                       "pct": 1348473122248069140,
-                      "center": 1441546087683854397,
+                      "center": 1348473192909508619,
                       "impromptu_ctr": 816170273619312661,
                       "impromptu_app": 816170152180580353,
                       "impromptu_twr": 816170084958470145,

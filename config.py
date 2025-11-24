@@ -6,6 +6,8 @@ import shutil
 import time
 from dotenv import load_dotenv
 
+from bot import logger
+
 load_dotenv()
 
 # --------- Environment-only secrets (stay in .env) ---------
@@ -96,8 +98,63 @@ def _load_guild_configs_from_disk():
     if not path.exists():
         # create a default empty file if missing
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("{}")
+        text = {
+                  "1441276520927596587": {
+                    "channels": {
+                      "staffup_channel": 1441298656434323518,
+                      "break_board_channel_id": 1441295212369547295,
+                      "impromptu_channel_id": 1441295141347528855,
+                      "general_announcement_channel_id": 1441483030320513245,
+                      "event_announcement_channel_id": 1441483088260497629,
+                      "websystem_announcement_channel_id": 1441483312878059660,
+                      "training_announcement_channel_id": 1441483149241618484,
+                      "facility_announcement_channel_id": 1441483207878115358
+                    },
+                    "roles": {
+                      "gnd_unrestricted": 1441545335964176606,
+                      "gnd_tier1": 1441545532613857483,
+                      "twr_unrestricted": 1441544668247494688,
+                      "twr_tier1": 1441545565182628011,
+                      "app_unrestricted": 1441544492686774473,
+                      "pct": 1441545450007166986,
+                      "center": 1441546087683854397,
+                      "impromptu_ctr": 1441544061491351643,
+                      "impromptu_app": 1441544025449566412,
+                      "impromptu_twr": 1441543998153031761,
+                      "impromptu_gnd": 1441543041633489048
+                    },
+                    "announcement_types": {}
+                  },
+                  "391802941486530561": {
+                    "channels": {
+                      "staffup_channel": 1023762177569603694,
+                      "break_board_channel_id": 1336549138237751366,
+                      "impromptu_channel_id": 534599644144074752,
+                      "general_announcement_channel_id": 1438253307553517588,
+                      "event_announcement_channel_id": 519379679807799306,
+                      "websystem_announcement_channel_id": 1201299423423115284,
+                      "training_announcement_channel_id": 1336412583254556672,
+                      "facility_announcement_channel_id": 975774188935717004
+                    },
+                    "roles": {
+                      "gnd_unrestricted": 1348472041069613068,
+                      "gnd_tier1": 1348472943780429905,
+                      "twr_unrestricted": 1348472717929615360,
+                      "twr_tier1": 1348473059887288542,
+                      "app_unrestricted": 1348472832363073577,
+                      "pct": 1348473122248069140,
+                      "center": 1348473192909508619,
+                      "impromptu_ctr": 816170273619312661,
+                      "impromptu_app": 816170152180580353,
+                      "impromptu_twr": 816170084958470145,
+                      "impromptu_gnd": 816169915945844736
+                    },
+                    "announcement_types": {}
+                  }
+        }
+        path.write_text(f"{text}")
         _guild_configs = {}
+        logger.info(f"Created new guild config file at {GUILD_CONFIG_FILE}")
         return
 
     try:

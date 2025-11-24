@@ -543,10 +543,10 @@ class Commands(commands.Cog):
                     embed.description = m.get("description")
                 pdf = m.get("pdf_url")
                 if pdf:
-                    embed.add_field(name="PDF", value=f"[Open PDF]({pdf})", inline=False)
+                    embed.add_field(name="Publication", value=f"[Open Pub]({pdf})", inline=False)
                 embed.set_footer(text=m.get("key") or "vZDC")
                 # send publicly
-                await interaction.followup.send(embed=embed, ephemeral=False)
+                await interaction.followup.send(embed=embed, ephemeral=True)
                 return
 
             # multiple candidates -> ephemeral list with instructions

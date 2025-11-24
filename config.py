@@ -153,7 +153,7 @@ def _load_guild_configs_from_disk():
                   }
         }
         path.write_text(f"{text}")
-        _guild_configs = {}
+        _guild_configs = {text}
         return
 
     try:

@@ -9,7 +9,8 @@
       "websystem_announcement_channel_id": 1441483312878059660,
       "training_announcement_channel_id": 1441483149241618484,
       "facility_announcement_channel_id": 1441483207878115358,
-      "welcome_channel_id": 1441496941677514814
+      "welcome_channel_id": 1441496941677514814,
+      "logging_channel_id": 1441493862752194590
     },
     "roles": {
       "gnd_unrestricted": 1441545335964176606,
@@ -35,7 +36,8 @@
       "event_announcement_channel_id": 519379679807799306,
       "websystem_announcement_channel_id": 1201299423423115284,
       "training_announcement_channel_id": 1336412583254556672,
-      "facility_announcement_channel_id": 975774188935717004
+      "facility_announcement_channel_id": 975774188935717004,
+      "logging_channel_id": 1441493862752194590
     },
     "roles": {
       "gnd_unrestricted": 1348472041069613068,

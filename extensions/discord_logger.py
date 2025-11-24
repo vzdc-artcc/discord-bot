@@ -1,642 +1,480 @@
-import logging
 import discord
 from discord.ext import commands
-from typing import Any, Dict, List
+import config
+import logging
+from datetime import datetime, timezone
+from typing import Optional, List, Any
+
+logger = logging.getLogger("discord_logger")
+
+# Helper truncation constants
+MAX_FIELD_LENGTH = 1900
+
+
+def _truncate(text: Optional[str], max_len: int = MAX_FIELD_LENGTH) -> str:
+    if text is None:
+        return ""
+    s = str(text)
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 12] + "...[truncated]"
+
+
+def _format_footer(author_id: Optional[int], message_id: Optional[int], ts: Optional[datetime]) -> str:
+    """Format footer like: "Author: <id> | Message ID: <id>•<discord timestamp>".
+
+    Use Discord's time formatting (<t:unix:f>) so clients show "Today at ..." or "Yesterday at ..." when appropriate.
+    """
+    parts = []
+    if author_id is not None:
+        parts.append(f"Author: {author_id}")
+    if message_id is not None:
+        parts.append(f"Message ID: {message_id}")
+
+    time_str = None
+    if ts is not None:
+        try:
+            # Use Discord's timestamp format so the client will render relative "Today/Yesterday" labels
+            unix_ts = int(ts.timestamp())
+            time_str = f"<t:{unix_ts}:f>"
+        except Exception:
+            try:
+                time_str = str(ts)
+            except Exception:
+                time_str = None
+
+    footer = " | ".join(parts) if parts else ""
+    if time_str:
+        # Compact bullet separator (no spaces) as requested: "Message ID: 123•<t:...:f>"
+        footer = f"{footer}•{time_str}" if footer else time_str
+    return footer
 
 
 class DiscordLogger(commands.Cog):
-    """Cog that logs deleted messages to the project's logger.
+    """Per-guild detailed logging cog.
 
-    Features:
-    - on_message_delete & on_raw_message_delete
-    - on_member_update -> logs role additions/removals and profile changes
-    - on_guild_role_update / on_guild_role_create / on_guild_role_delete -> logs role changes
-    - on_guild_channel_update / on_guild_channel_create / on_guild_channel_delete -> logs channel changes
-    - on_voice_state_update, on_guild_emojis_update, on_invite_create/delete, on_webhooks_update
-
-    Notes:
-    - Intents: member and guild intents are required (your bot already sets Intents.all()).
+    Reads `logging_channel_id` from `config.get_channel_for_guild(guild_id, 'logging_channel_id')`.
+    Sends embeds when possible, falls back to plaintext.
     """
 
-    def __init__(self, bot: commands.Bot, *, skip_bots: bool = True, max_content_len: int = 400):
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Use a dedicated logger name so entries can be filtered or routed separately if desired.
-        self.logger = logging.getLogger("deleted_messages")
-        self.server_logger = logging.getLogger("server_events")
-        self.skip_bots = skip_bots
-        self.max_content_len = max_content_len
+        # Simple in-memory marker for guilds where sending failed recently to avoid spam
+        self._send_failure_cooldown = {}
 
-    def _truncate(self, text: str) -> str:
-        if text is None:
-            return ""
-        if len(text) > self.max_content_len:
-            return text[: self.max_content_len] + "...(truncated)"
-        return text
+    # --- Helpers ---
+    def _get_log_channel_id(self, guild_id: int) -> Optional[int]:
+        return config.get_channel_for_guild(guild_id, "logging_channel_id")
 
-    @commands.Cog.listener()
-    async def on_message_delete(self, message: discord.Message):
-        """Called when a Message is deleted and the bot had it cached.
-
-        We'll log author (id/name), channel (id/name), guild id, message id, content (truncated),
-        attachments, and a short embeds representation.
-        """
-        try:
-            if self.skip_bots and message.author and message.author.bot:
-                return
-
-            content = getattr(message, "content", None)
-            # prefer clean_content when available (sanitizes mentions)
+    async def _resolve_channel(self, guild: discord.Guild):
+        cid = self._get_log_channel_id(guild.id)
+        if not cid:
+            return None
+        ch = guild.get_channel(int(cid))
+        if ch is None:
             try:
-                content = message.clean_content
+                ch = await self.bot.fetch_channel(int(cid))
             except Exception:
-                # Fallback to raw content
-                content = content or ""
-
-            content = self._truncate(content)
-
-            attachments = [a.url for a in (message.attachments or [])]
-            embeds = [e.to_dict() for e in (message.embeds or [])]
-
-            # Log as structured extra fields so JSON formatter can pick them up if configured.
-            self.logger.info(
-                "message_deleted",
-                extra={
-                    "event": "message_deleted",
-                    "message_id": getattr(message, "id", None),
-                    "channel_id": getattr(getattr(message, "channel", None), "id", None),
-                    "channel_name": getattr(getattr(message, "channel", None), "name", None),
-                    "guild_id": getattr(message, "guild", None) and getattr(message.guild, "id", None),
-                    "author_id": getattr(getattr(message, "author", None), "id", None),
-                    "author_name": getattr(getattr(message, "author", None), "name", None),
-                    "content": content,
-                    "attachments": attachments,
-                    "embeds": embeds,
-                },
-            )
-        except Exception:
-            # Ensure we never crash the bot because of logging
-            self.logger.exception("Failed to handle on_message_delete")
-
-    @commands.Cog.listener()
-    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
-        """Called when a message is deleted but it wasn't in the bot's message cache.
-
-        payload contains message_id and channel_id (and guild_id when applicable).
-        Content is not available in this event.
-        """
-        try:
-            # Raw events are lower-overhead; don't filter bots here because we don't have the author.
-            self.logger.info(
-                "raw_message_deleted",
-                extra={
-                    "event": "raw_message_deleted",
-                    "message_id": getattr(payload, "message_id", None),
-                    "channel_id": getattr(payload, "channel_id", None),
-                    "guild_id": getattr(payload, "guild_id", None),
-                },
-            )
-        except Exception:
-            self.logger.exception("Failed to handle on_raw_message_delete")
-
-    def _object_to_dict(self, obj: Any) -> Dict[str, Any]:
-        """Small helper to represent common discord objects as serializable dicts."""
-        if obj is None:
-            return {}
-        # Roles
-        if isinstance(obj, discord.Role):
-            return {"id": obj.id, "name": obj.name, "colour": obj.colour.value, "permissions": obj.permissions.value}
-        # Members
-        if isinstance(obj, discord.Member):
-            return {"id": obj.id, "name": obj.display_name, "roles": [r.id for r in obj.roles]}
-        # Channels
-        if isinstance(obj, discord.abc.GuildChannel):
-            return {"id": obj.id, "name": getattr(obj, "name", None), "type": str(obj.type)}
-        # PermissionOverwrite - best-effort to extract allow/deny values
-        if isinstance(obj, discord.PermissionOverwrite):
-            allow_val = None
-            deny_val = None
-            try:
-                # some PermissionOverwrite-like objects expose pair()
-                if hasattr(obj, "pair") and callable(getattr(obj, "pair")):
-                    a, d = obj.pair()
-                    allow_val = getattr(a, "value", a)
-                    deny_val = getattr(d, "value", d)
-                else:
-                    # fallback: try attributes
-                    a = getattr(obj, "allow", None)
-                    d = getattr(obj, "deny", None)
-                    allow_val = getattr(a, "value", a)
-                    deny_val = getattr(d, "value", d)
-            except Exception:
-                allow_val = None
-                deny_val = None
-            return {"allow": allow_val, "deny": deny_val}
-        # Fallback
-        return {"repr": str(obj)}
-
-    async def _find_audit_actor(self, guild: discord.Guild, action: Any, target_id: int = None) -> Dict[str, Any] | None:
-        """Try to find a recent audit log entry matching the action and target id.
-
-        Returns a small dict with user id/name and the entry id, or None.
-        This is a best-effort helper and may return None if audit logs are unavailable or the entry isn't found.
-        """
-        try:
-            if guild is None:
                 return None
-            async for entry in guild.audit_logs(limit=12, action=action):
+        return ch
+
+    async def _safe_send(self, channel: discord.abc.Messageable, *, embed: Optional[discord.Embed] = None, content: Optional[str] = None):
+        try:
+            # Try embed first
+            if embed is not None:
                 try:
-                    t = getattr(entry.target, "id", None)
+                    await channel.send(embed=embed)
+                    return
+                except discord.Forbidden:
+                    # Fall back to text
+                    pass
                 except Exception:
-                    t = None
-                if target_id is None or t == target_id:
-                    user = entry.user
-                    return {"moderator_id": getattr(user, "id", None), "moderator_name": getattr(user, "name", None), "entry_id": getattr(entry, "id", None)}
+                    # If embed send fails for other reasons, attempt text fallback
+                    logger.exception("Failed to send embed to log channel; falling back to text")
+            if content is None:
+                content = "(no content)"
+            await channel.send(content)
+        except discord.Forbidden:
+            logger.warning("Missing permission to send logs to channel %s", getattr(channel, "id", None))
         except Exception:
-            # don't propagate audit log errors
-            self.server_logger.debug("Audit log lookup failed", exc_info=True)
-        return None
+            logger.exception("Unexpected error sending log message")
 
-    @commands.Cog.listener()
-    async def on_member_update(self, before: discord.Member, after: discord.Member):
-        """Detect role additions/removals and profile changes on a member."""
+    async def _fetch_audit_actor(self, guild: discord.Guild, action: Any, *, target_id: Optional[int] = None, lookback_seconds: int = 10):
+        """Best-effort: find who performed an action via audit logs.
+
+        Returns tuple (member or None, reason or None).
+        """
         try:
-            # roles is a list with @everyone at index 0; compute set diffs
-            before_roles = {r.id for r in before.roles}
-            after_roles = {r.id for r in after.roles}
-
-            added = after_roles - before_roles
-            removed = before_roles - after_roles
-
-            if added or removed:
-                self.server_logger.info(
-                    "member_roles_changed",
-                    extra={
-                        "event": "member_roles_changed",
-                        "guild_id": getattr(after.guild, "id", None),
-                        "member_id": after.id,
-                        "member_name": after.display_name,
-                        "roles_added": list(added),
-                        "roles_removed": list(removed),
-                    },
-                )
-
-            # Detect nickname/display name change
-            before_name = getattr(before, "display_name", None)
-            after_name = getattr(after, "display_name", None)
-            if before_name != after_name:
-                self.server_logger.info(
-                    "member_name_changed",
-                    extra={
-                        "event": "member_name_changed",
-                        "guild_id": getattr(after.guild, "id", None),
-                        "member_id": after.id,
-                        "before": before_name,
-                        "after": after_name,
-                    },
-                )
-
-            # Avatar change
-            before_avatar = getattr(before, "avatar", None)
-            after_avatar = getattr(after, "avatar", None)
-            if before_avatar != after_avatar:
-                self.server_logger.info(
-                    "member_avatar_changed",
-                    extra={
-                        "event": "member_avatar_changed",
-                        "guild_id": getattr(after.guild, "id", None),
-                        "member_id": after.id,
-                        "avatar_before": str(before_avatar),
-                        "avatar_after": str(after_avatar),
-                    },
-                )
+            if not guild.me.guild_permissions.view_audit_log:
+                return None, None
         except Exception:
-            self.server_logger.exception("Failed to handle on_member_update")
+            return None, None
 
-    @commands.Cog.listener()
-    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         try:
-            # Log joins/leaves/mute/deaf changes
-            if before.channel != after.channel:
-                self.server_logger.info(
-                    "voice_channel_move",
-                    extra={
-                        "event": "voice_channel_move",
-                        "guild_id": getattr(member.guild, "id", None),
-                        "member_id": getattr(member, "id", None),
-                        "channel_before": getattr(getattr(before, "channel", None), "id", None),
-                        "channel_after": getattr(getattr(after, "channel", None), "id", None),
-                    },
-                )
-
-            # Mute/deaf status changes
-            if before.mute != after.mute or before.deaf != after.deaf or before.self_mute != after.self_mute or before.self_deaf != after.self_deaf:
-                self.server_logger.info(
-                    "voice_state_changed",
-                    extra={
-                        "event": "voice_state_changed",
-                        "guild_id": getattr(member.guild, "id", None),
-                        "member_id": getattr(member, "id", None),
-                        "mute_before": getattr(before, "mute", None),
-                        "mute_after": getattr(after, "mute", None),
-                        "deaf_before": getattr(before, "deaf", None),
-                        "deaf_after": getattr(after, "deaf", None),
-                        "self_mute_before": getattr(before, "self_mute", None),
-                        "self_mute_after": getattr(after, "self_mute", None),
-                        "self_deaf_before": getattr(before, "self_deaf", None),
-                        "self_deaf_after": getattr(after, "self_deaf", None),
-                    },
-                )
+            async for entry in guild.audit_logs(action=action, limit=6):
+                # If we have a target_id, try to match it
+                if target_id is not None and getattr(entry.target, "id", None) != target_id:
+                    continue
+                # Prefer very recent entries
+                if (datetime.now(timezone.utc) - entry.created_at).total_seconds() > lookback_seconds:
+                    continue
+                return entry.user, getattr(entry, "reason", None)
         except Exception:
-            self.server_logger.exception("Failed to handle on_voice_state_update")
+            logger.exception("Failed to query audit logs for guild %s", getattr(guild, "id", None))
+        return None, None
 
-    @commands.Cog.listener()
-    async def on_guild_emojis_update(self, guild: discord.Guild, before: List[discord.Emoji], after: List[discord.Emoji]):
-        try:
-            before_ids = {e.id for e in before}
-            after_ids = {e.id for e in after}
-            added = after_ids - before_ids
-            removed = before_ids - after_ids
-            if not added and not removed:
-                return
-            self.server_logger.info(
-                "emojis_changed",
-                extra={
-                    "event": "emojis_changed",
-                    "guild_id": getattr(guild, "id", None),
-                    "emojis_added": list(added),
-                    "emojis_removed": list(removed),
-                },
-            )
-        except Exception:
-            self.server_logger.exception("Failed to handle on_guild_emojis_update")
+    def _build_basic_embed(self, title: str, color: discord.Color = discord.Color.light_grey(), description: Optional[str] = None):
+        e = discord.Embed(title=title, color=color)
+        if description:
+            e.description = _truncate(description)
+        e.timestamp = datetime.now(timezone.utc)
+        return e
 
-    @commands.Cog.listener()
-    async def on_invite_create(self, invite: discord.Invite):
-        try:
-            self.server_logger.info(
-                "invite_created",
-                extra={
-                    "event": "invite_created",
-                    "guild_id": getattr(getattr(invite, "guild", None), "id", None),
-                    "channel_id": getattr(getattr(invite, "channel", None), "id", None),
-                    "code": getattr(invite, "code", None),
-                    "inviter_id": getattr(getattr(invite, "inviter", None), "id", None),
-                    "max_uses": getattr(invite, "max_uses", None),
-                    "temporary": getattr(invite, "temporary", None),
-                },
-            )
-        except Exception:
-            self.server_logger.exception("Failed to handle on_invite_create")
-
-    @commands.Cog.listener()
-    async def on_invite_delete(self, invite: discord.Invite):
-        try:
-            self.server_logger.info(
-                "invite_deleted",
-                extra={
-                    "event": "invite_deleted",
-                    "guild_id": getattr(getattr(invite, "guild", None), "id", None),
-                    "channel_id": getattr(getattr(invite, "channel", None), "id", None),
-                    "code": getattr(invite, "code", None),
-                },
-            )
-        except Exception:
-            self.server_logger.exception("Failed to handle on_invite_delete")
-
-    @commands.Cog.listener()
-    async def on_webhooks_update(self, channel: discord.abc.GuildChannel):
-        try:
-            self.server_logger.info(
-                "webhooks_updated",
-                extra={
-                    "event": "webhooks_updated",
-                    "guild_id": getattr(getattr(channel, "guild", None), "id", None),
-                    "channel_id": getattr(channel, "id", None),
-                    "channel_name": getattr(channel, "name", None),
-                },
-            )
-        except Exception:
-            self.server_logger.exception("Failed to handle on_webhooks_update")
-
-    # Role/channel event handlers already implemented earlier — attach audit actors where possible
-    @commands.Cog.listener()
-    async def on_guild_role_create(self, role: discord.Role):
-        try:
-            guild = getattr(role, "guild", None)
-            actor = await self._find_audit_actor(guild, discord.AuditLogAction.role_create, target_id=getattr(role, "id", None))
-            extra = {
-                "event": "role_created",
-                "guild_id": getattr(guild, "id", None),
-                "role_id": role.id,
-                "role_name": role.name,
-                "permissions": role.permissions.value,
-                "colour": role.colour.value,
-            }
-            if actor:
-                extra.update(actor)
-            self.server_logger.info("role_created", extra=extra)
-        except Exception:
-            self.server_logger.exception("Failed to handle on_guild_role_create")
-
-    @commands.Cog.listener()
-    async def on_guild_role_update(self, before: discord.Role, after: discord.Role):
-        """Log edits to a role's properties (name, colour, permissions, hoist, mentionable, position)."""
-        try:
-            # Diagnostic log to confirm event fires and inspect values (will show in server_events.jsonl).
-            try:
-                self.server_logger.info(
-                    "role_update_event",
-                    extra={
-                        "event": "role_update_event",
-                        "guild_id": getattr(after, "guild", None) and getattr(after.guild, "id", None),
-                        "role_id": getattr(after, "id", None),
-                        "before_name": getattr(before, "name", None),
-                        "after_name": getattr(after, "name", None),
-                        "before_colour": getattr(getattr(before, "colour", None), "value", None),
-                        "after_colour": getattr(getattr(after, "colour", None), "value", None),
-                        "before_permissions": getattr(getattr(before, "permissions", None), "value", None),
-                        "after_permissions": getattr(getattr(after, "permissions", None), "value", None),
-                        "before_repr": repr(before),
-                        "after_repr": repr(after),
-                    },
-                )
-            except Exception:
-                # non-fatal for diagnostics
-                self.server_logger.debug("Failed to write diagnostic role_update_event", exc_info=True)
-
-            guild = getattr(after, "guild", None) or getattr(before, "guild", None)
-            diffs: Dict[str, Any] = {}
-            if before.name != after.name:
-                diffs["name"] = {"before": before.name, "after": after.name}
-            if before.colour != after.colour:
-                diffs["colour"] = {"before": getattr(before.colour, "value", None), "after": getattr(after.colour, "value", None)}
-            if before.permissions != after.permissions:
-                diffs["permissions"] = {"before": before.permissions.value, "after": after.permissions.value}
-            if getattr(before, "hoist", None) != getattr(after, "hoist", None):
-                diffs["hoist"] = {"before": getattr(before, "hoist", None), "after": getattr(after, "hoist", None)}
-            if getattr(before, "mentionable", None) != getattr(after, "mentionable", None):
-                diffs["mentionable"] = {"before": getattr(before, "mentionable", None), "after": getattr(after, "mentionable", None)}
-            # position can change when roles are reordered
-            if getattr(before, "position", None) != getattr(after, "position", None):
-                diffs["position"] = {"before": getattr(before, "position", None), "after": getattr(after, "position", None)}
-
-            if not diffs:
-                return
-
-            actor = None
-            try:
-                actor = await self._find_audit_actor(guild, discord.AuditLogAction.role_update, target_id=getattr(after, "id", None))
-            except Exception:
-                actor = None
-
-            extra = {
-                "event": "role_updated",
-                "guild_id": getattr(guild, "id", None),
-                "role_id": getattr(after, "id", None),
-                "role_name_before": getattr(before, "name", None),
-                "role_name_after": getattr(after, "name", None),
-                "diffs": diffs,
-            }
-            if actor:
-                extra.update(actor)
-
-            self.server_logger.info("role_updated", extra=extra)
-        except Exception:
-            self.server_logger.exception("Failed to handle on_guild_role_update")
-
-    @commands.Cog.listener()
-    async def on_guild_role_delete(self, role: discord.Role):
-        try:
-            guild = getattr(role, "guild", None)
-            actor = await self._find_audit_actor(guild, discord.AuditLogAction.role_delete, target_id=getattr(role, "id", None))
-            extra = {
-                "event": "role_deleted",
-                "guild_id": getattr(guild, "id", None),
-                "role_id": role.id,
-                "role_name": role.name,
-            }
-            if actor:
-                extra.update(actor)
-            self.server_logger.info("role_deleted", extra=extra)
-        except Exception:
-            self.server_logger.exception("Failed to handle on_guild_role_delete")
-
-    @commands.Cog.listener()
-    async def on_guild_channel_create(self, channel: discord.abc.GuildChannel):
-        try:
-            actor = None
-            try:
-                actor = await self._find_audit_actor(channel.guild, discord.AuditLogAction.channel_create, target_id=getattr(channel, "id", None))
-            except Exception:
-                actor = None
-            extra = {
-                "event": "channel_created",
-                "guild_id": getattr(channel.guild, "id", None),
-                "channel_id": getattr(channel, "id", None),
-                "channel_name": getattr(channel, "name", None),
-                "type": str(getattr(channel, "type", None)),
-            }
-            if actor:
-                extra.update(actor)
-            self.server_logger.info("channel_created", extra=extra)
-        except Exception:
-            self.server_logger.exception("Failed to handle on_guild_channel_create")
-
-    @commands.Cog.listener()
-    async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel):
-        try:
-            actor = None
-            try:
-                actor = await self._find_audit_actor(channel.guild, discord.AuditLogAction.channel_delete, target_id=getattr(channel, "id", None))
-            except Exception:
-                actor = None
-            extra = {
-                "event": "channel_deleted",
-                "guild_id": getattr(channel.guild, "id", None),
-                "channel_id": getattr(channel, "id", None),
-                "channel_name": getattr(channel, "name", None),
-            }
-            if actor:
-                extra.update(actor)
-            self.server_logger.info("channel_deleted", extra=extra)
-        except Exception:
-            self.server_logger.exception("Failed to handle on_guild_channel_delete")
-
-    @commands.Cog.listener()
-    async def on_guild_channel_update(self, before: discord.abc.GuildChannel, after: discord.abc.GuildChannel):
-        try:
-            diffs: Dict[str, Any] = {}
-            if getattr(before, "name", None) != getattr(after, "name", None):
-                diffs["name"] = {"before": getattr(before, "name", None), "after": getattr(after, "name", None)}
-            if getattr(before, "type", None) != getattr(after, "type", None):
-                diffs["type"] = {"before": str(getattr(before, "type", None)), "after": str(getattr(after, "type", None))}
-
-            # Permission overwrites can change — do a best-effort comparison by overwrites' ids
-            before_overwrites = { (getattr(o, 'id', None) if hasattr(o, 'id') else None): o for o in getattr(before, '_overwrites', []) }
-            after_overwrites = { (getattr(o, 'id', None) if hasattr(o, 'id') else None): o for o in getattr(after, '_overwrites', []) }
-            if set(before_overwrites.keys()) != set(after_overwrites.keys()):
-                diffs["permission_overwrite_ids"] = {"before": list(before_overwrites.keys()), "after": list(after_overwrites.keys())}
-
-            if not diffs:
-                return
-
-            actor = None
-            try:
-                actor = await self._find_audit_actor(getattr(after, 'guild', None), discord.AuditLogAction.channel_update, target_id=getattr(after, 'id', None))
-            except Exception:
-                actor = None
-
-            extra = {
-                "event": "channel_updated",
-                "guild_id": getattr(after.guild, "id", None),
-                "channel_id": getattr(after, "id", None),
-                "channel_name": getattr(after, "name", None),
-                "diffs": diffs,
-            }
-            if actor:
-                extra.update(actor)
-
-            self.server_logger.info("channel_updated", extra=extra)
-        except Exception:
-            self.server_logger.exception("Failed to handle on_guild_channel_update")
-
-    @commands.Cog.listener()
-    async def on_message_edit(self, before: discord.Message, after: discord.Message):
-        """Log message edits when available (cached)."""
-        try:
-            if self.skip_bots and before.author and before.author.bot:
-                return
-            if before.content == after.content:
-                return
-            self.server_logger.info(
-                "message_edited",
-                extra={
-                    "event": "message_edited",
-                    "message_id": getattr(before, "id", None),
-                    "channel_id": getattr(getattr(before, "channel", None), "id", None),
-                    "guild_id": getattr(before.guild, "id", None),
-                    "author_id": getattr(getattr(before, "author", None), "id", None),
-                    "author_name": getattr(getattr(before, "author", None), "name", None),
-                    "before": self._truncate(getattr(before, "content", "")),
-                    "after": self._truncate(getattr(after, "content", "")),
-                },
-            )
-        except Exception:
-            self.server_logger.exception("Failed to handle on_message_edit")
-
+    # --- Events ---
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
-        try:
-            self.server_logger.info(
-                "member_join",
-                extra={
-                    "event": "member_join",
-                    "guild_id": getattr(member.guild, "id", None),
-                    "member_id": getattr(member, "id", None),
-                    "member_name": getattr(member, "name", None) or getattr(member, "display_name", None),
-                },
-            )
-        except Exception:
-            self.server_logger.exception("Failed to handle on_member_join")
+        guild = member.guild
+        if guild is None:
+            return
+        channel = await self._resolve_channel(guild)
+        if channel is None:
+            return
+        desc = f"Member: {member} (ID {member.id}) joined. Account created: {member.created_at.isoformat()}"
+        embed = self._build_basic_embed("🟢 Member Join", discord.Color.green(), desc)
+        embed.set_thumbnail(url=getattr(member.display_avatar, "url", None))
+        await self._safe_send(channel, embed=embed)
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
-        try:
-            self.server_logger.info(
-                "member_remove",
-                extra={
-                    "event": "member_remove",
-                    "guild_id": getattr(member.guild, "id", None),
-                    "member_id": getattr(member, "id", None),
-                    "member_name": getattr(member, "name", None) or getattr(member, "display_name", None),
-                },
-            )
-        except Exception:
-            self.server_logger.exception("Failed to handle on_member_remove")
+        guild = member.guild
+        if guild is None:
+            return
+        channel = await self._resolve_channel(guild)
+        if channel is None:
+            return
+        # Try to determine if this was a kick via audit logs
+        actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.kick, target_id=member.id)
+        title = "🔴 Member Removed"
+        desc_lines = [f"Member: {member} (ID {member.id})"]
+        if actor:
+            desc_lines.append(f"Removed by: {actor} (ID {actor.id})")
+        else:
+            desc_lines.append("Removed by: (unknown)")
+        if reason:
+            desc_lines.append(f"Reason: {reason}")
+        desc = "\n".join(desc_lines)
+        embed = self._build_basic_embed(title, discord.Color.red(), desc)
+        await self._safe_send(channel, embed=embed)
 
     @commands.Cog.listener()
     async def on_member_ban(self, guild: discord.Guild, user: discord.User):
-        try:
-            actor = await self._find_audit_actor(guild, discord.AuditLogAction.ban, target_id=getattr(user, "id", None))
-            extra = {
-                "event": "member_ban",
-                "guild_id": getattr(guild, "id", None),
-                "user_id": getattr(user, "id", None),
-                "user_name": getattr(user, "name", None),
-            }
-            if actor:
-                extra.update(actor)
-            self.server_logger.info("member_ban", extra=extra)
-        except Exception:
-            self.server_logger.exception("Failed to handle on_member_ban")
+        channel = await self._resolve_channel(guild)
+        if channel is None:
+            return
+        actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.ban, target_id=user.id)
+        title = "🔨 Member Banned"
+        desc_lines = [f"User: {user} (ID {user.id})"]
+        if actor:
+            desc_lines.append(f"Banned by: {actor} (ID {actor.id})")
+        else:
+            desc_lines.append("Banned by: (unknown)")
+        if reason:
+            desc_lines.append(f"Reason: {reason}")
+        embed = self._build_basic_embed(title, discord.Color.dark_red(), "\n".join(desc_lines))
+        await self._safe_send(channel, embed=embed)
 
     @commands.Cog.listener()
     async def on_member_unban(self, guild: discord.Guild, user: discord.User):
-        try:
-            actor = await self._find_audit_actor(guild, discord.AuditLogAction.unban, target_id=getattr(user, "id", None))
-            extra = {
-                "event": "member_unban",
-                "guild_id": getattr(guild, "id", None),
-                "user_id": getattr(user, "id", None),
-                "user_name": getattr(user, "name", None),
-            }
-            if actor:
-                extra.update(actor)
-            self.server_logger.info("member_unban", extra=extra)
-        except Exception:
-            self.server_logger.exception("Failed to handle on_member_unban")
+        channel = await self._resolve_channel(guild)
+        if channel is None:
+            return
+        actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.unban, target_id=user.id)
+        title = "🟡 Member Unbanned"
+        desc_lines = [f"User: {user} (ID {user.id})"]
+        if actor:
+            desc_lines.append(f"Unbanned by: {actor} (ID {actor.id})")
+        else:
+            desc_lines.append("Unbanned by: (unknown)")
+        if reason:
+            desc_lines.append(f"Reason: {reason}")
+        embed = self._build_basic_embed(title, discord.Color.gold(), "\n".join(desc_lines))
+        await self._safe_send(channel, embed=embed)
 
     @commands.Cog.listener()
-    async def on_guild_update(self, before: discord.Guild, after: discord.Guild):
+    async def on_guild_role_create(self, role: discord.Role):
+        guild = role.guild
+        channel = await self._resolve_channel(guild)
+        if channel is None:
+            return
+        actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.role_create, target_id=role.id)
+        title = "🔧 Role Created"
+        desc = f"Role: {role.name} (ID {role.id}) created"
+        if actor:
+            desc += f" by {actor} (ID {actor.id})"
+        if reason:
+            desc += f" — Reason: {reason}"
+        embed = self._build_basic_embed(title, discord.Color.orange(), desc)
+        await self._safe_send(channel, embed=embed)
+
+    @commands.Cog.listener()
+    async def on_guild_role_delete(self, role: discord.Role):
+        guild = role.guild
+        channel = await self._resolve_channel(guild)
+        if channel is None:
+            return
+        actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.role_delete, target_id=role.id)
+        title = "🗑️ Role Deleted"
+        desc = f"Role: {role.name} (ID {role.id}) deleted"
+        if actor:
+            desc += f" by {actor} (ID {actor.id})"
+        if reason:
+            desc += f" — Reason: {reason}"
+        embed = self._build_basic_embed(title, discord.Color.dark_grey(), desc)
+        await self._safe_send(channel, embed=embed)
+
+    @commands.Cog.listener()
+    async def on_guild_role_update(self, before: discord.Role, after: discord.Role):
+        guild = after.guild
+        channel = await self._resolve_channel(guild)
+        if channel is None:
+            return
+        actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.role_update, target_id=after.id)
+        title = "✏️ Role Edited"
+        diffs = []
+        if before.name != after.name:
+            diffs.append(f"Name: '{before.name}' -> '{after.name}'")
+        if before.permissions != after.permissions:
+            diffs.append("Permissions changed")
+        if before.color != after.color:
+            diffs.append(f"Color changed")
+        if before.hoist != after.hoist:
+            diffs.append(f"Hoist changed: {before.hoist} -> {after.hoist}")
+        if not diffs:
+            diffs.append("No visible changes")
+        desc = f"Role: {after.name} (ID {after.id})\n" + "; ".join(diffs)
+        if actor:
+            desc += f"\nEdited by: {actor} (ID {actor.id})"
+        if reason:
+            desc += f"\nReason: {reason}"
+        embed = self._build_basic_embed(title, discord.Color.blue(), desc)
+        await self._safe_send(channel, embed=embed)
+
+    @commands.Cog.listener()
+    async def on_member_update(self, before: discord.Member, after: discord.Member):
+        # Detect role adds/removes
+        guild = after.guild
+        channel = await self._resolve_channel(guild)
+        if channel is None:
+            return
+        before_roles = set(before.roles)
+        after_roles = set(after.roles)
+        added = after_roles - before_roles
+        removed = before_roles - after_roles
+        if not added and not removed:
+            return
+        # Try to attribute via audit logs (best-effort)
+        actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.member_role_update, target_id=after.id)
+        title = "🧾 Member Roles Updated"
+        parts: List[str] = [f"Member: {after} (ID {after.id})"]
+        if added:
+            parts.append("Added roles: " + ", ".join(r.name for r in added))
+        if removed:
+            parts.append("Removed roles: " + ", ".join(r.name for r in removed))
+        if actor:
+            parts.append(f"By: {actor} (ID {actor.id})")
+        else:
+            parts.append("By: (unknown)")
+        if reason:
+            parts.append(f"Reason: {reason}")
+        embed = self._build_basic_embed(title, discord.Color.purple(), "\n".join(parts))
+        await self._safe_send(channel, embed=embed)
+
+    @commands.Cog.listener()
+    async def on_message_delete(self, message: discord.Message):
+        guild = message.guild
+        if guild is None:
+            return
+        channel = await self._resolve_channel(guild)
+        if channel is None:
+            return
+        # message may be partial (not cached)
+        author = getattr(message, "author", None)
+        title = "🗑️ Message Deleted"
+        # Put identifying info in the description
+        desc_parts = [f"Channel: {getattr(message.channel, 'name', repr(message.channel))} (ID {getattr(message.channel, 'id', 'unknown')})"]
+        if author:
+            desc_parts.append(f"Author: {author} (ID {author.id})")
+        desc_parts.append(f"Message ID: {getattr(message, 'id', 'unknown')}")
+        embed = self._build_basic_embed(title, discord.Color.dark_grey(), "\n".join(desc_parts))
+
+        # Content field (use embed field so it displays cleanly)
+        content = getattr(message, "content", None)
+        content_value = _truncate(content) if content else "(unavailable)"
         try:
-            diffs: Dict[str, Any] = {}
-            if before.name != after.name:
-                diffs["name"] = {"before": before.name, "after": after.name}
-            if getattr(before, "description", None) != getattr(after, "description", None):
-                diffs["description"] = {"before": getattr(before, "description", None), "after": getattr(after, "description", None)}
-            if not diffs:
-                return
-            self.server_logger.info(
-                "guild_updated",
-                extra={
-                    "event": "guild_updated",
-                    "guild_id": getattr(after, "id", None),
-                    "diffs": diffs,
-                },
-            )
+            embed.add_field(name="Content", value=content_value, inline=False)
         except Exception:
-            self.server_logger.exception("Failed to handle on_guild_update")
+            # Fall back to appending to description
+            embed.description = (embed.description or "") + "\nContent: " + content_value
 
-    @commands.command(name="roleinfo")
-    @commands.has_guild_permissions(administrator=True)
-    async def roleinfo(self, ctx: commands.Context, role: discord.Role):
-        """Admin command: log a snapshot of a role's current properties to server_events.jsonl."""
+        # Attachments as a separate field when present
         try:
-            guild = getattr(role, "guild", None)
-            extra = {
-                "event": "role_snapshot",
-                "guild_id": getattr(guild, "id", None),
-                "role_id": role.id,
-                "role_name": role.name,
-                "permissions": getattr(getattr(role, "permissions", None), "value", None),
-                "colour": getattr(getattr(role, "colour", None), "value", None),
-                "hoist": getattr(role, "hoist", None),
-                "mentionable": getattr(role, "mentionable", None),
-                "position": getattr(role, "position", None),
-            }
-            self.server_logger.info("role_snapshot", extra=extra)
-            await ctx.send(f"Logged snapshot for role `{role.name}` ({role.id}).")
-        except Exception as e:
-            self.server_logger.exception("Failed to run roleinfo command")
-            await ctx.send(f"Failed to log role info: {e}")
+            attachments = getattr(message, "attachments", []) or []
+            if attachments:
+                # Prefer listing URLs if short; otherwise show a count
+                att_urls = ", ".join(getattr(a, 'url', str(a)) for a in attachments)
+                if len(att_urls) <= MAX_FIELD_LENGTH:
+                    embed.add_field(name="Attachments", value=att_urls, inline=False)
+                else:
+                    embed.add_field(name="Attachments", value=f"{len(attachments)} attachment(s)", inline=False)
+        except Exception:
+            # Ignore attachment formatting failures
+            pass
 
-    @commands.command(name="force_role_snapshot")
-    @commands.has_guild_permissions(administrator=True)
-    async def force_role_snapshot(self, ctx: commands.Context, role: discord.Role):
-        """Admin command: force a role snapshot (same as roleinfo) to help debugging."""
-        await self.roleinfo.callback(self, ctx, role)
+        # Footer with author/id and message timestamp
+        footer_text = _format_footer(getattr(author, 'id', None), getattr(message, 'id', None), getattr(message, 'created_at', None))
+        if footer_text:
+            embed.set_footer(text=footer_text)
+        await self._safe_send(channel, embed=embed)
+
+    @commands.Cog.listener()
+    async def on_bulk_message_delete(self, messages: List[discord.Message]):
+        if not messages:
+            return
+        guild = messages[0].guild
+        if guild is None:
+            return
+        channel = await self._resolve_channel(guild)
+        if channel is None:
+            return
+        title = "🗑️ Bulk Message Delete"
+        chans = {}
+        for m in messages:
+            ch = getattr(m.channel, "id", None)
+            chans.setdefault(ch, 0)
+            chans[ch] += 1
+        lines = [f"Total messages deleted: {len(messages)}"]
+        for ch_id, cnt in chans.items():
+            lines.append(f"Channel ID {ch_id}: {cnt} messages")
+        embed = self._build_basic_embed(title, discord.Color.dark_grey(), "\n".join(lines))
+        await self._safe_send(channel, embed=embed)
+
+    @commands.Cog.listener()
+    async def on_message_edit(self, before: discord.Message, after: discord.Message):
+        if before.content == after.content:
+            return
+        guild = after.guild
+        if guild is None:
+            return
+        channel = await self._resolve_channel(guild)
+        if channel is None:
+            return
+        title = "✍️ Message Edited"
+        # Keep short identifying info in the description
+        desc_parts = [f"Channel: {getattr(after.channel, 'name', repr(after.channel))} (ID {getattr(after.channel, 'id', 'unknown')})"]
+        desc_parts.append(f"Author: {getattr(after.author, 'name', repr(after.author))} (ID {getattr(after.author, 'id', 'unknown')})")
+        desc_parts.append(f"Message ID: {after.id}")
+        embed = self._build_basic_embed(title, discord.Color.dark_blue(), "\n".join(desc_parts))
+
+        # Add Before/After as dedicated fields (non-inline) so they render cleanly
+        before_content = _truncate(getattr(before, 'content', None)) or "(unavailable)"
+        after_content = _truncate(getattr(after, 'content', None)) or "(unavailable)"
+        try:
+            embed.add_field(name="Before", value=before_content, inline=False)
+        except Exception:
+            # If adding a field fails for any reason, append to description as fallback
+            embed.description = (embed.description or "") + "\nBefore: " + before_content
+        try:
+            embed.add_field(name="After", value=after_content, inline=False)
+        except Exception:
+            embed.description = (embed.description or "") + "\nAfter: " + after_content
+
+        # Footer with author/id and message timestamp
+        footer_text = _format_footer(getattr(after.author, 'id', None), getattr(after, 'id', None), getattr(after, 'created_at', None))
+        if footer_text:
+            embed.set_footer(text=footer_text)
+        await self._safe_send(channel, embed=embed)
+
+    @commands.Cog.listener()
+    async def on_guild_channel_create(self, channel: discord.abc.GuildChannel):
+        guild = channel.guild
+        ch = await self._resolve_channel(guild)
+        if ch is None:
+            return
+        actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.channel_create, target_id=channel.id)
+        title = "📁 Channel Created"
+        desc = f"Channel: {channel.name} (ID {channel.id}) Type: {type(channel).__name__}"
+        if actor:
+            desc += f" by {actor} (ID {actor.id})"
+        if reason:
+            desc += f" — Reason: {reason}"
+        embed = self._build_basic_embed(title, discord.Color.teal(), desc)
+        await self._safe_send(ch, embed=embed)
+
+    @commands.Cog.listener()
+    async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel):
+        guild = channel.guild
+        ch = await self._resolve_channel(guild)
+        if ch is None:
+            return
+        actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.channel_delete, target_id=channel.id)
+        title = "🗑️ Channel Deleted"
+        desc = f"Channel: {getattr(channel, 'name', '(deleted)')} (ID {channel.id})"
+        if actor:
+            desc += f" by {actor} (ID {actor.id})"
+        if reason:
+            desc += f" — Reason: {reason}"
+        embed = self._build_basic_embed(title, discord.Color.dark_grey(), desc)
+        await self._safe_send(ch, embed=embed)
+
+    @commands.Cog.listener()
+    async def on_guild_channel_update(self, before: discord.abc.GuildChannel, after: discord.abc.GuildChannel):
+        guild = after.guild
+        ch = await self._resolve_channel(guild)
+        if ch is None:
+            return
+        actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.channel_update, target_id=after.id)
+        title = "✏️ Channel Edited"
+        diffs = []
+        try:
+            if getattr(before, 'name', None) != getattr(after, 'name', None):
+                diffs.append(f"Name: '{getattr(before, 'name', None)}' -> '{getattr(after, 'name', None)}'")
+            if getattr(before, 'position', None) != getattr(after, 'position', None):
+                diffs.append(f"Position: {getattr(before, 'position', None)} -> {getattr(after, 'position', None)}")
+        except Exception:
+            diffs.append("Channel properties changed")
+        if not diffs:
+            diffs.append("No visible changes")
+        desc = f"Channel: {getattr(after, 'name', repr(after))} (ID {after.id})\n" + "; ".join(diffs)
+        if actor:
+            desc += f"\nEdited by: {actor} (ID {actor.id})"
+        if reason:
+            desc += f"\nReason: {reason}"
+        embed = self._build_basic_embed(title, discord.Color.gold(), desc)
+        await self._safe_send(ch, embed=embed)
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+        guild = member.guild
+        channel = await self._resolve_channel(guild)
+        if channel is None:
+            return
+        # Determine join/leave/move
+        b = getattr(before, 'channel', None)
+        a = getattr(after, 'channel', None)
+        if b is None and a is not None:
+            title = "🔊 Voice Channel Join"
+            desc = f"Member: {member} joined {a.name} (ID {a.id})"
+        elif b is not None and a is None:
+            title = "🔇 Voice Channel Leave"
+            desc = f"Member: {member} left {b.name} (ID {b.id})"
+        elif b is not None and a is not None and b.id != a.id:
+            title = "🔀 Voice Channel Move"
+            desc = f"Member: {member} moved {b.name} (ID {b.id}) -> {a.name} (ID {a.id})"
+        else:
+            return
+        embed = self._build_basic_embed(title, discord.Color.blurple(), desc)
+        await self._safe_send(channel, embed=embed)
 
 
 async def setup(bot: commands.Bot):
-    """Extension entrypoint for discord.py v2-style extensions."""
     await bot.add_cog(DiscordLogger(bot))

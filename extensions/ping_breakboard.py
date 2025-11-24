@@ -1,4 +1,3 @@
-import datetime
 import discord
 from bot import logger
 from discord.ext import commands
@@ -49,7 +48,7 @@ class BreakRequestActions(discord.ui.View):
             try:
                 await interaction.message.delete()
             except Exception as e:
-                logger.error("Error deleting break request message after claim: {e}")
+                logger.error(f"Error deleting break request message after claim: {e}")
         else:
             await interaction.channel.send(
                 f"🚨 {reliever_user.mention} has claimed this break! The original requester is no longer in the server."
@@ -213,26 +212,69 @@ class BreakBoard(commands.Cog):
 
         # Initialize per-guild behavior for every guild the bot is in.
         for guild in self.bot.guilds:
+            # Diagnostic: log guild and cwd info to help trace why channels may not be found
+            logger.debug(f"Initializing BreakBoard for guild: id={guild.id}, name='{guild.name}', cwd={os.getcwd()}")
             guild_cfg = cfg.get_guild_config(guild.id)
+            try:
+                cfg_snapshot = guild_cfg.as_dict()
+            except Exception:
+                cfg_snapshot = {}
+            logger.debug(f"Guild config snapshot for {guild.id}: {cfg_snapshot}")
+
             channel_id = guild_cfg.get_channel("break_board_channel_id")
+            logger.debug(f"Resolved break_board_channel_id for guild {guild.id}: {channel_id} (type={type(channel_id)})")
+
             if not channel_id:
                 logger.info(f"No breakboard channel configured for guild {guild.id} ({guild.name}), skipping.")
                 continue
 
-            channel = self.bot.get_channel(channel_id) or await self.bot.fetch_channel(channel_id)
-            if not channel:
-                logger.info(f"Error: BreakBoard channel with ID {channel_id} not found in guild {guild.id}.")
+            # Try to locate the channel: prefer guild cache then global cache, then fetch
+            channel = guild.get_channel(channel_id) or self.bot.get_channel(channel_id)
+            if channel is None:
+                try:
+                    channel = await self.bot.fetch_channel(channel_id)
+                except discord.NotFound:
+                    logger.info(f"BreakBoard channel with ID {channel_id} not found in guild {guild.id} ({guild.name}).")
+                    # Log available text channels in the guild to help debugging
+                    try:
+                        available = ", ".join([f"{c.name}({c.id})" for c in guild.text_channels])
+                        logger.debug(f"Guild {guild.id} text channels: {available}")
+                    except Exception:
+                        logger.debug("Could not list guild text channels for debugging.")
+                    continue
+                except discord.Forbidden:
+                    logger.info(f"Bot doesn't have permission to fetch channel {channel_id} in guild {guild.id} ({guild.name}).")
+                    try:
+                        available = ", ".join([f"{c.name}({c.id})" for c in guild.text_channels])
+                        logger.debug(f"Guild {guild.id} text channels: {available}")
+                    except Exception:
+                        logger.debug("Could not list guild text channels for debugging.")
+                    continue
+                except Exception as e:
+                    logger.exception(f"Unexpected error while fetching breakboard channel {channel_id} for guild {guild.id}: {e}")
+                    try:
+                        available = ", ".join([f"{c.name}({c.id})" for c in guild.text_channels])
+                        logger.debug(f"Guild {guild.id} text channels: {available}")
+                    except Exception:
+                        logger.debug("Could not list guild text channels for debugging.")
+                    continue
+
+            logger.info(f"Located breakboard channel {channel.name} (ID: {channel.id}) in guild {guild.id} ({guild.name}).")
+
+            # Ensure we have a text channel — warn if it's not what we expect
+            if not isinstance(channel, discord.abc.Messageable) and not isinstance(channel, discord.TextChannel):
+                logger.warning(f"Configured breakboard channel {channel_id} exists but is not a text channel: {type(channel)}")
                 continue
 
-            # Attempt to load a per-guild saved message id
-            msg_file = _role_selector_file_for_guild(guild.id)
+            # Attempt to re-attach view to a persisted message if present
+            # The BreakBoard uses the notification file to persist its message id
+            msg_file = _notification_file_for_guild(guild.id)
             saved_message_id = None
             if os.path.exists(msg_file):
                 try:
                     with open(msg_file, "r") as f:
                         data = json.load(f)
                         saved_message_id = data.get("message_id")
-                        # ignore stored channel mismatch — we'll use configured channel
                 except Exception:
                     saved_message_id = None
 
@@ -246,6 +288,8 @@ class BreakBoard(commands.Cog):
                     logger.info("Previous BreakBoard message not found. Sending a new one.")
                 except discord.Forbidden:
                     logger.info(f"Bot doesn't have permission to fetch message {saved_message_id} in channel {channel_id}.")
+                except Exception as e:
+                    logger.exception(f"Unexpected error while fetching stored BreakBoard message {saved_message_id} for guild {guild.id}: {e}")
 
             await self.send_initial_embed_with_buttons(channel)
 
@@ -418,16 +462,50 @@ class RoleSelector(commands.Cog):
 
         logger.info("RoleSelector cog ready.")
         for guild in self.bot.guilds:
+            # Diagnostic logging similar to BreakBoard to help debugging
+            logger.debug(f"Initializing RoleSelector for guild: id={guild.id}, name='{guild.name}', cwd={os.getcwd()}")
             guild_cfg = cfg.get_guild_config(guild.id)
+            try:
+                cfg_snapshot = guild_cfg.as_dict()
+            except Exception:
+                cfg_snapshot = {}
+            logger.debug(f"Guild config snapshot for {guild.id}: {cfg_snapshot}")
+
             channel_id = guild_cfg.get_channel("break_board_channel_id")
+            logger.debug(f"Resolved break_board_channel_id for RoleSelector in guild {guild.id}: {channel_id} (type={type(channel_id)})")
             if not channel_id:
                 logger.info(f"No role selector channel configured for guild {guild.id} ({guild.name}), skipping.")
                 continue
 
-            channel = self.bot.get_channel(channel_id) or await self.bot.fetch_channel(channel_id)
-            if not channel:
-                logger.info(f"Role Selector channel with ID {channel_id} not found in guild {guild.id}.")
-                continue
+            # Prefer guild.get_channel before bot.get_channel when resolving the configured channel ID
+            channel = guild.get_channel(channel_id) or self.bot.get_channel(channel_id)
+            if channel is None:
+                try:
+                    channel = await self.bot.fetch_channel(channel_id)
+                except discord.NotFound:
+                    logger.info(f"Role Selector channel with ID {channel_id} not found in guild {guild.id}.")
+                    try:
+                        available = ", ".join([f"{c.name}({c.id})" for c in guild.text_channels])
+                        logger.debug(f"Guild {guild.id} text channels: {available}")
+                    except Exception:
+                        logger.debug("Could not list guild text channels for debugging.")
+                    continue
+                except discord.Forbidden:
+                    logger.info(f"Bot doesn't have permission to fetch channel {channel_id} in guild {guild.id}.")
+                    try:
+                        available = ", ".join([f"{c.name}({c.id})" for c in guild.text_channels])
+                        logger.debug(f"Guild {guild.id} text channels: {available}")
+                    except Exception:
+                        logger.debug("Could not list guild text channels for debugging.")
+                    continue
+                except Exception as e:
+                    logger.exception(f"Unexpected error while fetching role selector channel {channel_id} for guild {guild.id}: {e}")
+                    try:
+                        available = ", ".join([f"{c.name}({c.id})" for c in guild.text_channels])
+                        logger.debug(f"Guild {guild.id} text channels: {available}")
+                    except Exception:
+                        logger.debug("Could not list guild text channels for debugging.")
+                    continue
 
             # try per-guild saved message
             msg_file = _role_selector_file_for_guild(guild.id)
@@ -450,6 +528,8 @@ class RoleSelector(commands.Cog):
                     logger.info("Previous role selector message not found. Sending a new one.")
                 except discord.Forbidden:
                     logger.info(f"Bot doesn't have permission to fetch message {saved_message_id} in channel {channel_id}.")
+                except Exception as e:
+                    logger.exception(f"Unexpected error while fetching stored role selector message {saved_message_id} for guild {guild.id}: {e}")
             await self.send_initial_embed_with_buttons(channel)
 
     async def send_initial_embed_with_buttons(self, channel: discord.TextChannel):

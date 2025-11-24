@@ -90,6 +90,24 @@ class DebugTools(commands.Cog):
 
         info["resolved_permissions_on_guild_channel"] = perm_info
 
+        # Report which file the config module is using and whether it contains the guild entry
+        try:
+            import pathlib, hashlib
+            cfg_path = pathlib.Path(cfg.GUILD_CONFIG_FILE)
+            info["guild_config_file"] = str(cfg.GUILD_CONFIG_FILE)
+            info["guild_config_file_exists"] = cfg_path.exists()
+            if cfg_path.exists():
+                raw_text = cfg_path.read_text()
+                info["guild_config_file_size"] = cfg_path.stat().st_size
+                info["guild_config_file_md5"] = hashlib.md5(raw_text.encode()).hexdigest()
+                try:
+                    raw_json = json.loads(raw_text)
+                    info["raw_file_entry_for_guild"] = raw_json.get(str(guild_id))
+                except Exception:
+                    info["raw_file_entry_for_guild"] = "<unparseable>"
+        except Exception as e:
+            info["guild_config_file_error"] = str(e)
+
         # Send JSON blob so it's easy to copy/paste
         await ctx.send(f"```{json.dumps(info, indent=2)}```")
 
@@ -111,6 +129,28 @@ class DebugTools(commands.Cog):
         else:
             # Send as a single-line f-string code block to avoid unterminated string syntax
             await ctx.send(f"```{cfg_json}```")
+
+    @commands.command(name="setbreakboard")
+    @commands.has_guild_permissions(manage_guild=True)
+    async def set_breakboard(self, ctx: commands.Context, channel: discord.TextChannel):
+        """Set and persist the breakboard channel for this guild. Usage: `!setbreakboard #channel`"""
+        guild = ctx.guild
+        if guild is None:
+            await ctx.send("This command must be run in a guild.")
+            return
+
+        # Load current config dict and update the break_board_channel_id
+        current = cfg.get_guild_config(guild.id).as_dict()
+        if "channels" not in current:
+            current["channels"] = {}
+        current["channels"]["break_board_channel_id"] = int(channel.id)
+
+        try:
+            cfg.save_guild_config(guild.id, current)
+            await ctx.send(f"Set breakboard channel to {channel.mention} (id={channel.id}) and saved to config.")
+        except Exception as e:
+            await ctx.send(f"Failed to save breakboard channel: {e}")
+            logger.exception("Failed to persist breakboard channel configuration")
 
 
 async def setup(bot):

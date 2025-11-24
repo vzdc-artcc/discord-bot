@@ -6,78 +6,71 @@ import logging
 import os
 import inspect
 import requests
+import re
 from utils.awc_api_helpers import get_category_color, qnh_hpa_to_inhg
 
 
+def _find_first_key(obj, keys):
+    """Recursively search dict/list 'obj' for the first occurrence of any key in 'keys' and return its value."""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        for k in keys:
+            if k in obj and obj[k] is not None:
+                return obj[k]
+        for v in obj.values():
+            res = _find_first_key(v, keys)
+            if res is not None:
+                return res
+        return None
+    if isinstance(obj, list):
+        for item in obj:
+            res = _find_first_key(item, keys)
+            if res is not None:
+                return res
+        return None
+    return None
+
+
 class Commands(commands.Cog):
-    """A Cog that provides slash (application) commands.
-
-    - /ping: simple latency check
-    - /manage echo <text>: an example management subcommand that echoes text (permission-checked)
-
-    This Cog is implemented using discord.app_commands so commands are registered as slash commands.
-    """
+    """A Cog that provides slash (application) commands for weather (METAR/TAF)."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.logger = logging.getLogger(__name__)
-        self.logger.info("Commands cog initialized.")
-        # Track whether we've attempted to sync application commands to avoid repeated work
         self._synced = False
-
-    @app_commands.command(name="ping", description="Check bot latency")
-    async def ping(self, interaction: discord.Interaction):
-        """Respond with pong and a rough latency measurement."""
-        # Acknowledge quickly then follow up with latency
-        await interaction.response.send_message("Pong! Calculating latency...")
-        try:
-            latency_ms = round(self.bot.latency * 1000)
-        except Exception:
-            latency_ms = None
-
-        if latency_ms is not None:
-            await interaction.followup.send(f"Latency: {latency_ms}ms")
-        else:
-            await interaction.followup.send("Latency information unavailable.")
-
-    # Example command group
-    manage_group = app_commands.Group(name="manage", description="Management helpers")
-
-    @manage_group.command(name="echo", description="Echo text back (requires Manage Server)")
-    async def manage_echo(self, interaction: discord.Interaction, text: str):
-        """Echo a provided string back to the channel if the user has Manage Guild permission."""
-        await interaction.response.defer(ephemeral=True)
-
-        # Permission check performed at runtime to avoid decorator-specific behavior
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.followup.send("You do not have permission to run this command.", ephemeral=True)
-            return
-
-        await interaction.followup.send(f"Echo: {text}", ephemeral=True)
 
     weather_group = app_commands.Group(name="weather", description="Weather Tools")
 
-    @weather_group.command(name="metar", description="Returns the latest METAR for a given airport ICAO code.")
+    # -------------------- METAR --------------------
+    @weather_group.command(name="metar", description="Returns the latest METAR for an ICAO.")
     async def weather_metar(self, interaction: discord.Interaction, icao: str):
         base_url = "https://aviationweather.gov/"
         guild = interaction.guild
         await interaction.response.defer()
 
         try:
-            resp = requests.get(f"{base_url}/api/data/metar?ids={icao}&bbox=&format=json&taf=false&hours=1&date=",
-                                timeout=10)
+            resp = requests.get(
+                f"{base_url}/api/data/metar?ids={icao}&bbox=&format=json&taf=false&hours=1&date=",
+                timeout=10,
+            )
             resp.raise_for_status()
             payload = resp.json()
         except Exception as e:
             await interaction.followup.send(f"Failed to fetch METAR: {e}")
             return
 
-        # Normalize payload to a single metar dict
+        # Normalize payload to a single station dict
         metar = None
         if isinstance(payload, dict):
-            if isinstance(payload.get("data"), list) and payload["data"]:
+            if payload.get("features") and isinstance(payload.get("features"), list) and payload["features"]:
+                first = payload["features"][0]
+                metar = first.get("properties") if isinstance(first, dict) and first.get("properties") else first
+            elif isinstance(payload.get("data"), list) and payload["data"]:
                 metar = payload["data"][0]
-            elif payload:  # fallback if API returned a single dict with fields directly
+            elif isinstance(payload.get("observations"), list) and payload["observations"]:
+                metar = payload["observations"][0]
+            elif payload:
                 metar = payload
         elif isinstance(payload, list) and payload:
             metar = payload[0]
@@ -86,59 +79,14 @@ class Commands(commands.Cog):
             await interaction.followup.send(f"No METAR found for {icao.upper()}.")
             return
 
-        # Parse report time (support int/float timestamp or ISO string)
-        now_utc = datetime.now(timezone.utc)
-        report_time_raw = metar.get("reportTime")
-        report_dt = None
-        if isinstance(report_time_raw, (int, float)):
-            try:
-                report_dt = datetime.fromtimestamp(int(report_time_raw), timezone.utc)
-            except Exception:
-                report_dt = None
-        elif isinstance(report_time_raw, str):
-            try:
-                report_dt = datetime.fromisoformat(report_time_raw.replace("Z", "+00:00"))
-            except Exception:
-                try:
-                    report_dt = datetime.strptime(report_time_raw, "%Y-%m-%dT%H:%M:%S%z")
-                except Exception:
-                    report_dt = None
-
-        # Convert altimeter safely
-        altim_raw = metar.get("altim") or metar.get("alt")
-        try:
-            altimeter = qnh_hpa_to_inhg(float(altim_raw)) if altim_raw is not None else "N/A"
-        except Exception:
-            altimeter = "N/A"
-
-        color = get_category_color(metar.get("fltCat") or metar.get("flightCategory") or metar.get("flight_cat"))
-
-        # Build embed; use report_dt (or now) for embed.timestamp
-        embed = discord.Embed(
-            title=f"METAR for {icao.upper()}",
-            color=color,
-            timestamp=now_utc,
-        )
-
-        # Use Discord timestamp markup so each user sees local time
-        if report_dt:
-            report_time_value = f"<t:{int(report_dt.timestamp())}:F>"
-        else:
-            report_time_value = "Unknown"
-
-        embed.add_field(name="Raw METAR", value=str(metar.get("rawOb", "N/A")), inline=False)
-        embed.add_field(name="Report Time", value=report_time_value, inline=True)
-
-        # --- Formatting helpers for units ---
+        # --- formatters ---
         def _fmt_temperature(raw):
             if raw is None:
                 return "N/A"
-            # Accept numeric or numeric strings
             if isinstance(raw, (int, float)):
                 return f"{int(round(raw))}°C"
             if isinstance(raw, str):
-                # if already contains a degree symbol or unit, return as-is
-                if "°" in raw or "C" in raw or "F" in raw:
+                if any(u in raw for u in ("°", "C", "F")):
                     return raw
                 try:
                     return f"{int(round(float(raw)))}°C"
@@ -153,176 +101,356 @@ class Commands(commands.Cog):
                             return str(raw[k])
             return str(raw)
 
-        def _fmt_altimeter_value(raw_altimeter):
-            # raw_altimeter could be a float already converted to inHg, or a raw string/value
-            if raw_altimeter is None:
+        def _fmt_altimeter_value(raw_alt):
+            if raw_alt is None:
                 return "N/A"
-            # If already a number (float/int), assume it's in inHg
-            if isinstance(raw_altimeter, (int, float)):
-                return f"{raw_altimeter:.2f} inHg"
-            # If it's a string that already contains 'in' or 'Hg', return as-is
-            if isinstance(raw_altimeter, str):
-                if "in" in raw_altimeter.lower() or "hg" in raw_altimeter.lower():
-                    return raw_altimeter
-                # Try to parse numeric string
+            # if numeric, assume in inHg already
+            if isinstance(raw_alt, (int, float)):
+                return f"{raw_alt:.2f} inHg"
+            if isinstance(raw_alt, str):
+                if "in" in raw_alt.lower() or "hg" in raw_alt.lower():
+                    return raw_alt
                 try:
-                    val = float(raw_altimeter)
+                    val = float(raw_alt)
                     return f"{val:.2f} inHg"
                 except Exception:
-                    return raw_altimeter
-            # Fallback to str
+                    return raw_alt
+            # try to convert
             try:
-                return f"{float(raw_altimeter):.2f} inHg"
+                return f"{float(raw_alt):.2f} inHg"
             except Exception:
-                return str(raw_altimeter)
+                return str(raw_alt)
 
         def _fmt_visibility(raw_vis):
             if raw_vis is None:
                 return "N/A"
-            # If it's a dict try common keys
             if isinstance(raw_vis, dict):
                 for k in ("value", "visibility", "vis", "visib"):
                     if k in raw_vis and raw_vis[k] is not None:
                         raw_vis = raw_vis[k]
                         break
-            # If it's numeric, decide meters vs statute miles by heuristic
             if isinstance(raw_vis, (int, float)):
                 val = float(raw_vis)
-                # Heuristic: values >= 1000 are likely meters
                 if val >= 1000:
                     meters = val
                     sm = meters / 1609.344
-                    # Show both SM and meters
                     return f"{sm:.1f} SM ({int(round(meters))} m)"
                 else:
-                    # treat as statute miles
                     return f"{val:.1f} SM"
             if isinstance(raw_vis, str):
-                lower = raw_vis.lower()
-                # if already annotated with units, return as-is
-                if "sm" in lower or "m" in lower or "km" in lower or "nm" in lower:
-                    return raw_vis
-                # try numeric parse
-                try:
-                    val = float(raw_vis)
-                    if val >= 1000:
-                        meters = val
-                        sm = meters / 1609.344
-                        return f"{sm:.1f} SM ({int(round(meters))} m)"
-                    else:
-                        return f"{val:.1f} SM"
-                except Exception:
-                    return raw_vis
+                s = raw_vis.strip()
+                # keep things like '10+' or '6'
+                return s
             return str(raw_vis)
 
-        # Apply formatters
-        altimeter_str = _fmt_altimeter_value(altimeter)
-        temp_str = _fmt_temperature(metar.get("temp", None))
-        dewp_str = _fmt_temperature(metar.get("dewp", None))
+        # --- extract fields ---
+        # time
+        report_raw = metar.get("reportTime") or metar.get("obsTime") or metar.get("observation_time") or metar.get("receiptTime")
+        report_dt = None
+        if isinstance(report_raw, (int, float)):
+            try:
+                report_dt = datetime.fromtimestamp(int(report_raw), timezone.utc)
+            except Exception:
+                report_dt = None
+        elif isinstance(report_raw, str):
+            try:
+                report_dt = datetime.fromisoformat(report_raw.replace("Z", "+00:00"))
+            except Exception:
+                report_dt = None
 
-        embed.add_field(name="Altimeter", value=altimeter_str, inline=True)
-        embed.add_field(name="Temperature", value=temp_str, inline=True)
-        embed.add_field(name="Dewpoint", value=dewp_str, inline=True)
+        # raw text
+        raw_text = (
+            metar.get("raw_text")
+            or metar.get("rawText")
+            or metar.get("rawOb")
+            or metar.get("raw")
+            or _find_first_key(metar, ["raw_text", "rawText", "raw", "rawOb", "raw_message"])
+        )
 
-        # Combine wind direction and speed into one field (e.g. "110°, 10 kts")
-        wdir_raw = metar.get("wdir") or metar.get("wind_dir") or metar.get("wdir_deg")
-        wspd_raw = metar.get("wspd") or metar.get("wind_speed") or metar.get("wspd_kts")
-        gust_raw = metar.get("gust") or metar.get("gust_kts") or metar.get("wgust") or metar.get("gust_speed")
+        # altimeter candidates
+        alt_keys = ("altim_in_hg", "altim", "alt", "sea_level_pressure_hpa", "sea_level_pressure_mb", "pressure_hpa", "pressure_mb", "qnh", "hpa", "slp")
+        alt_raw = None
+        alt_key_used = None
+        for k in alt_keys:
+            if k in metar and metar.get(k) is not None:
+                alt_raw = metar.get(k)
+                alt_key_used = k
+                break
 
-        def _fmt_wind_dir(raw):
-            if raw is None:
+        # temperature / dewpoint
+        temp_raw = metar.get("temp_c") or metar.get("temp") or metar.get("temperature") or _find_first_key(metar, ["temp", "temp_c"])
+        dewp_raw = metar.get("dewpoint_c") or metar.get("dewp") or metar.get("dewpoint") or _find_first_key(metar, ["dewpoint", "dewp"])
+
+        # wind fields (AWC uses wdir/wspd/wgst; other providers vary)
+        wdir = metar.get("wind_dir_degrees") or metar.get("wdir") or metar.get("wdir_deg") or metar.get("wdir_raw")
+        wspd = metar.get("wind_speed_kt") or metar.get("wspd") or metar.get("wspd_kts") or metar.get("wind_speed")
+        wgust = metar.get("wind_gust_kt") or metar.get("wgst") or metar.get("wind_gust") or metar.get("gust")
+
+        def _fmt_wind_dir(d):
+            if d is None:
                 return None
-            if isinstance(raw, (int, float)):
-                return f"{int(round(raw))}°"
-            if isinstance(raw, str):
-                # Preserve non-numeric values like 'VRB'
-                try:
-                    return f"{int(round(float(raw)))}°"
-                except Exception:
-                    return raw
-            if isinstance(raw, dict):
-                for k in ("value", "dir", "degree", "degrees", "deg"):
-                    if k in raw and raw[k] is not None:
-                        try:
-                            return f"{int(round(float(raw[k])))}°"
-                        except Exception:
-                            return str(raw[k])
-            return str(raw)
+            try:
+                return f"{int(round(float(d)))}°"
+            except Exception:
+                return str(d)
 
-        def _parse_numeric(raw):
-            """Try to extract a numeric value (float) from various raw forms or return None."""
-            if raw is None:
+        def _num(v):
+            if v is None:
                 return None
-            if isinstance(raw, (int, float)):
-                return float(raw)
-            if isinstance(raw, str):
-                try:
-                    return float(raw)
-                except Exception:
-                    return None
-            if isinstance(raw, dict):
-                for k in ("value", "speed", "spd", "kt", "kts", "speed_kts"):
-                    if k in raw and raw[k] is not None:
-                        try:
-                            return float(raw[k])
-                        except Exception:
-                            continue
-            return None
+            try:
+                return float(v)
+            except Exception:
+                return None
 
-        dir_val_raw = _fmt_wind_dir(wdir_raw)
-        spd_num = _parse_numeric(wspd_raw)
-        gust_num = _parse_numeric(gust_raw)
+        wspd_n = _num(wspd)
+        wgust_n = _num(wgust)
+        wdir_s = _fmt_wind_dir(wdir)
 
-        # Format output strings
-        if spd_num == 0:
-            # If true calm conditions; include gust if present
-            if gust_num and gust_num > 0:
-                wind_value = f"Calm, gust {int(round(gust_num))} kts"
+        if wspd_n == 0 or wspd_n is None and wdir in (0, "0"):
+            # If speed is zero (or wdir 0 and wspd None), show Calm (unless gusts)
+            if wgust_n and wgust_n > 0:
+                wind_value = f"Calm, Gusts: {int(round(wgust_n))} Kts"
             else:
                 wind_value = "Calm"
         else:
-            dir_val = dir_val_raw or "N/A"
-            if spd_num is not None:
-                spd_str = f"{int(round(spd_num))} kts"
+            spd_part = f"{int(round(wspd_n))} Kts" if wspd_n is not None else "N/A"
+            gust_part = f", gust {int(round(wgust_n))} kts" if wgust_n is not None and (wspd_n is None or wgust_n > (wspd_n or 0)) else ""
+            wind_value = f"{wdir_s or 'N/A'}, {spd_part}{gust_part}"
+
+        # altimeter conversion: if key suggests hPa (sea_level_pressure_mb/hpa/slp) convert using helper
+        alt_for_fmt = None
+        if alt_raw is None:
+            alt_for_fmt = None
+        else:
+            if alt_key_used in ("altim_in_hg",) or (isinstance(alt_raw, str) and ("in" in str(alt_raw).lower() or "hg" in str(alt_raw).lower())):
+                alt_for_fmt = alt_raw
             else:
-                spd_str = "N/A"
+                # try to convert hPa to inHg
+                try:
+                    alt_for_fmt = qnh_hpa_to_inhg(alt_raw)
+                except Exception:
+                    alt_for_fmt = alt_raw
 
-            gust_str = ""
-            if gust_num is not None and (spd_num is None or gust_num > (spd_num or 0)):
-                gust_str = f", gust {int(round(gust_num))} kts"
+        altimeter_str = _fmt_altimeter_value(alt_for_fmt)
+        temp_str = _fmt_temperature(temp_raw)
+        dewp_str = _fmt_temperature(dewp_raw)
+        vis_str = _fmt_visibility(metar.get("visibility_statute_mi") or metar.get("visib") or metar.get("visibility") or _find_first_key(metar, ["visib", "visibility"]))
 
-            wind_value = f"{dir_val}, {spd_str}{gust_str}"
+        # flight category / color
+        flt_cat = metar.get("flight_category") or metar.get("fltCat") or metar.get("flightCategory") or metar.get("flight_cat") or metar.get("flt_category")
+        color = get_category_color(flt_cat)
 
+        # Build embed
+        embed = discord.Embed(title=f"METAR for {icao.upper()}", color=color, timestamp=datetime.now(timezone.utc))
+        embed.add_field(name="Raw METAR", value=str(raw_text or "N/A"), inline=False)
+        if report_dt:
+            embed.add_field(name="Report Time", value=f"<t:{int(report_dt.timestamp())}:F>", inline=True)
+        else:
+            embed.add_field(name="Report Time", value="Unknown", inline=True)
+        embed.add_field(name="Altimeter", value=altimeter_str, inline=True)
+        embed.add_field(name="Temperature", value=temp_str, inline=True)
+        embed.add_field(name="Dewpoint", value=dewp_str, inline=True)
         embed.add_field(name="Wind", value=wind_value, inline=True)
-        # Format visibility with units
-        vis_str = _fmt_visibility(metar.get("visib", metar.get("visibility", None)))
         embed.add_field(name="Visibility", value=vis_str, inline=True)
-        embed.add_field(name="Cloud Cover", value=str(metar.get("cover", "N/A")), inline=True)
 
-        if metar.get("wxString"):
-            embed.add_field(name="Precip", value=metar.get("wxString"), inline=False)
-
+        # Clouds
         cloud_text = ""
         if metar.get("clouds"):
-            for cloud in metar["clouds"]:
-                cloud_text += f"Cover: {cloud.get('cover', 'N/A')}, Bases: {cloud.get('base', 'N/A')}\n"
+            for c in metar["clouds"]:
+                cloud_text += f"Cover: {c.get('cover','N/A')}, Bases: {c.get('base','N/A')}\n"
+        elif metar.get("cover"):
+            cloud_text = str(metar.get("cover"))
         embed.add_field(name="Clouds", value=cloud_text or "None", inline=False)
 
         embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild and guild.icon else None)
-
         await interaction.followup.send(embed=embed)
+
+    # -------------------- TAF --------------------
+    @weather_group.command(name="taf", description="Returns the latest TAF for an ICAO.")
+    async def weather_taf(self, interaction: discord.Interaction, icao: str):
+        base_url = "https://aviationweather.gov/"
+        guild = interaction.guild
+        await interaction.response.defer()
+
+        try:
+            resp = requests.get(f"{base_url}/api/data/taf?ids={icao}&format=json&hours=24&date=", timeout=10)
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception as e:
+            await interaction.followup.send(f"Failed to fetch TAF: {e}")
+            return
+
+        # normalize
+        taf = None
+        if isinstance(payload, dict):
+            if payload.get("features") and isinstance(payload.get("features"), list) and payload["features"]:
+                first = payload["features"][0]
+                taf = first.get("properties") if isinstance(first, dict) and first.get("properties") else first
+            elif isinstance(payload.get("data"), list) and payload["data"]:
+                taf = payload["data"][0]
+            elif isinstance(payload.get("observations"), list) and payload["observations"]:
+                taf = payload["observations"][0]
+            elif payload:
+                taf = payload
+        elif isinstance(payload, list) and payload:
+            taf = payload[0]
+
+        if not taf:
+            await interaction.followup.send(f"No TAF found for {icao.upper()}.")
+            return
+
+        raw_taf = taf.get("rawTAF") or taf.get("rawText") or taf.get("raw_text") or _find_first_key(taf, ["rawTAF", "rawText", "raw_text", "raw"])
+
+        embed = discord.Embed(title=f"TAF for {icao.upper()}", description=str(raw_taf or taf.get("rawText", "N/A")), color=discord.Color.blue())
+
+        forecasts = taf.get("fcsts") or taf.get("forecast") or taf.get("periods") or taf.get("forecasts") or taf.get("fcst") or []
+
+        def _to_dt(v):
+            if v is None:
+                return None
+            if isinstance(v, (int, float)):
+                try:
+                    return datetime.fromtimestamp(int(v), timezone.utc)
+                except Exception:
+                    return None
+            if isinstance(v, str):
+                try:
+                    return datetime.fromisoformat(v.replace("Z", "+00:00"))
+                except Exception:
+                    return None
+            return None
+
+        def _fmt_vis_taf(v):
+            if v is None:
+                return "N/A"
+            if isinstance(v, (int, float)):
+                return f"{v}sm"
+            return str(v)
+
+        def _parse_vis_sm(v):
+            if v is None:
+                return None
+            try:
+                if isinstance(v, (int, float)):
+                    return float(v)
+                s = str(v).strip()
+                m = re.match(r"^(\d+(?:\.\d+)?)(?:\+)?", s)
+                if m:
+                    return float(m.group(1))
+            except Exception:
+                return None
+            return None
+
+        def _determine_cat(vis_raw, clouds):
+            vis = _parse_vis_sm(vis_raw)
+            lowest = None
+            if isinstance(clouds, list):
+                for c in clouds:
+                    cover = (c.get("cover") or c.get("sky_cover") or "").upper()
+                    base = c.get("base") or c.get("base_ft_agl") or c.get("cloud_base_ft_agl")
+                    if cover in ("BKN", "OVC", "VV") and base:
+                        try:
+                            b = int(base)
+                            if lowest is None or b < lowest:
+                                lowest = b
+                        except Exception:
+                            continue
+            if (vis is not None and vis < 1) or (lowest is not None and lowest < 500):
+                return "LIFR"
+            if (vis is not None and vis < 3) or (lowest is not None and lowest < 1000):
+                return "IFR"
+            if (vis is not None and vis < 5) or (lowest is not None and lowest < 3000):
+                return "MVFR"
+            if vis is not None or lowest is not None:
+                return "VFR"
+            return "N/A"
+
+        if not forecasts and isinstance(raw_taf, str):
+            embed.add_field(name="Raw TAF", value=raw_taf, inline=False)
+            embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild and guild.icon else None)
+            await interaction.followup.send(embed=embed)
+            return
+
+        for fc in forecasts:
+            time_from = _to_dt(fc.get("timeFrom") or fc.get("fcstTimeFrom") or fc.get("time_from"))
+            time_to = _to_dt(fc.get("timeTo") or fc.get("fcstTimeTo") or fc.get("time_to"))
+            if time_from:
+                utc_heading = time_from.strftime("%d/%m %H%MZ")
+                local_ts = f" (<t:{int(time_from.timestamp())}:F>)"
+                heading = f"From {utc_heading}{local_ts}"
+            else:
+                heading = "From Unknown"
+
+            # AWC fields wdir/wspd/wgst/visib
+            wdir = fc.get("wdir") or fc.get("windDirDegrees") or fc.get("wind_dir")
+            wspd = fc.get("wspd") or fc.get("windSpeedKt") or fc.get("wind_speed_kt")
+            wgst = fc.get("wgst") or fc.get("wgst_kts") or fc.get("windGustKt") or fc.get("wind_gust_kt")
+
+            try:
+                wdir_s = (f"{int(round(float(wdir)))}°" if wdir is not None and str(wdir).strip() != "" else None)
+            except Exception:
+                wdir_s = (str(wdir) if wdir is not None else None)
+            try:
+                wspd_n = float(wspd) if wspd is not None and str(wspd).strip() != "" else None
+            except Exception:
+                wspd_n = None
+            try:
+                wgst_n = float(wgst) if wgst is not None and str(wgst).strip() != "" else None
+            except Exception:
+                wgst_n = None
+
+            if wspd_n == 0:
+                wind_val = "Calm" if not wgst_n else f"Calm, Gusts: {int(round(wgst_n))} Kts"
+            else:
+                spd_part = f"{int(round(wspd_n))} Kts" if wspd_n is not None else "N/A"
+                gust_part = f", Gusts: {int(round(wgst_n))} Kts" if wgst_n is not None and (wspd_n is None or wgst_n > (wspd_n or 0)) else ""
+                wind_val = f"{wdir_s or 'N/A'}, {spd_part}{gust_part}"
+
+            vis_raw = fc.get("visib") or fc.get("vis") or fc.get("visibility") or fc.get("visibilityStatuteMiles")
+            vis_str = _fmt_vis_taf(vis_raw)
+            flt = fc.get("flightCategory") or _determine_cat(vis_raw, fc.get("clouds") or [])
+            flt = flt or "N/A"
+
+            lines = []
+            lines.append(f"Wind:{wind_val}")
+            lines.append(f"Flight Rules: {flt}")
+            lines.append(f"Visibility: {vis_str}")
+            if fc.get("wxString") or fc.get("weather"):
+                lines.append(f"Weather: {fc.get('wxString') or fc.get('weather')}")
+
+            embed.add_field(name=heading, value="\n".join(lines), inline=False)
+
+        embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild and guild.icon else None)
+        await interaction.followup.send(embed=embed)
+
+    # -------------------- registration helpers --------------------
+    async def setup_hook(self):
+        """Cog-specific setup hook to register app_commands with the bot's tree."""
+        try:
+            self.bot.tree.add_command(self.weather_group)
+            logging.getLogger(__name__).debug("Added weather_group to bot.tree")
+        except Exception:
+            logging.getLogger(__name__).debug("weather_group already present in bot.tree or failed to add")
+
+        for name, member in inspect.getmembers(self.__class__):
+            try:
+                if isinstance(member, app_commands.Command) or isinstance(member, app_commands.Group):
+                    try:
+                        if member is self.weather_group:
+                            continue
+                        self.bot.tree.add_command(member)
+                        logging.getLogger(__name__).debug("Added app command '%s' to bot.tree", name)
+                    except Exception:
+                        logging.getLogger(__name__).debug("Failed to add app command '%s' to bot.tree (it may already exist).", name)
+            except Exception:
+                continue
+
     @commands.Cog.listener()
     async def on_ready(self):
-        # Log when the bot is ready and the cog is active
-        if not self.bot.is_ready():
-            return
-
-        # Only sync once per bot instance
+        # avoid repeated syncs
         if self._synced or getattr(self.bot, "_app_commands_synced", False):
-            self.logger.debug("Application commands already synced; skipping sync step.")
             return
 
-        # Allow an optional developer guild to be specified via env var for fast sync during development
         guild_env = os.getenv("APP_COMMANDS_GUILD_ID")
         try:
             if guild_env:
@@ -339,36 +467,17 @@ class Commands(commands.Cog):
                 synced = await self.bot.tree.sync()
                 self.logger.info("Globally synced %d application commands.", len(synced))
 
-            # Mark synced to avoid repeating
             self._synced = True
             setattr(self.bot, "_app_commands_synced", True)
         except Exception as e:
             self.logger.exception("Failed to sync application commands: %s", e)
 
-        self.logger.info("Commands cog ready. Application commands should be registered with Discord.")
-
-    async def setup_hook(self):
-        """Cog-specific setup hook to register app_commands with the bot's tree."""
-        # Inspect the Cog class for app_commands.Command or app_commands.Group attributes and add them to the tree.
-        # This ensures commands defined with @app_commands.command inside the Cog are actually present in bot.tree
-        for name, member in inspect.getmembers(self.__class__):
-            try:
-                if isinstance(member, app_commands.Command) or isinstance(member, app_commands.Group):
-                    try:
-                        self.bot.tree.add_command(member)
-                        logging.getLogger(__name__).debug("Added app command '%s' to bot.tree", name)
-                    except Exception:
-                        # Ignore if already registered or other tree-related errors
-                        logging.getLogger(__name__).debug("Failed to add app command '%s' to bot.tree (it may already exist).", name)
-            except Exception:
-                # Be resilient to any unexpected inspect/getmembers issues
-                continue
-
 
 async def setup(bot: commands.Bot):
     """Async setup function used by discord.py to load this cog."""
     cog = Commands(bot)
-    # Register the cog with the bot
     await bot.add_cog(cog)
-    # Call the setup_hook to register app_commands
-    await cog.setup_hook()
+    try:
+        await cog.setup_hook()
+    except Exception:
+        pass

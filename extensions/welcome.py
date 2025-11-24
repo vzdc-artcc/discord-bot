@@ -2,7 +2,6 @@ import discord
 from discord.ext import commands
 from typing import Optional
 from datetime import datetime, timezone
-
 import config
 
 
@@ -19,13 +18,10 @@ class Welcome(commands.Cog):
         self.bot = bot
         # Default template; can be overridden when constructing the cog
         self.template = template or (
-            "Welcome {mention}!\n"
+            "Welcome {member.mention}!\n\n"
             "Welcome to the vZDC Discord. Thanks for being part of the community.\n\n"
-            "Welcome to vZDC! We’re excited to have you join us as a controller in one of the busiest and most complex airspaces on VATSIM. You’re now part of a dedicated team of virtual controllers committed to excellence, professionalism, and supporting one another.\n\n"
-            "Some stuff about rules etc:\n\n"
-            "- shdauhd\n\n"
-            "- dsadsad\n\n"
-            "We’re thrilled to have you onboard. **Welcome home to the nation's capital!**"
+            "We’re excited to have you join us in one of the busiest and most complex airspaces on VATSIM.\n\n"
+            "Please follow the Discord Community Guidelines and our server rules at all times."
         )
 
     @commands.Cog.listener()
@@ -50,17 +46,13 @@ class Welcome(commands.Cog):
                 title=f"Welcome to vZDC, {member.display_name}!",
                 description=(
                     f"Welcome {member.mention}!\n\n"
-                    "Welcome to the vZDC Discord. Thanks for being part of the community.\n\n"
-                    "We’re excited to have you join us as a controller in one of the busiest and most complex airspaces on VATSIM. You’re now part of a dedicated team of virtual controllers committed to excellence, professionalism, and supporting one another.\n\n"
-                    "Some stuff about rules etc:\n\n"
-                    "- shdauhd\n"
-                    "- dsadsad\n\n"
-                    "We’re thrilled to have you onboard. **Welcome home to the nation's capital!**"
+                    "Welcome to the vZDC Discord. Thanks for being part of the community."
+                    " We’re excited to have you join us in one of the busiest and most complex airspaces on VATSIM.\n\n"
+                    "Please follow the [Discord Community Guidelines](https://discord.com/guidelines) and our server rules at all times."
                 ),
                 color=discord.Color.red()
             )
 
-            # Try to set the user's avatar as the thumbnail
             try:
                 avatar_url = member.display_avatar.url
             except Exception:

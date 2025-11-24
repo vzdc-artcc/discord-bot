@@ -565,6 +565,51 @@ class Commands(commands.Cog):
             self.logger.exception("/pub command failed: %s", e)
             await interaction.followup.send("An internal error occurred while searching publications.", ephemeral=True)
 
+    @pub.autocomplete('query')
+    async def pub_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
+        """Provide autocomplete suggestions for the /pub query parameter.
+
+        Returns a list of app_commands.Choice where value is the publication key.
+        """
+        try:
+            q = (current or "").strip().lower()
+            choices: List[app_commands.Choice[str]] = []
+
+            # Build candidate list: match tokens if q provided, otherwise return top keys
+            candidates = []
+            if q:
+                for item in self._search_index:
+                    if any(q in t for t in item.get("tokens", [])):
+                        candidates.append(item)
+            else:
+                # no input yet: show top entries (sorted by key)
+                candidates = sorted(self._search_index, key=lambda x: x["key"])[:25]
+
+            # If none matched and q present, fallback to fuzzy matches on keys
+            if q and not candidates:
+                keys = list(self.publications.keys())
+                close = difflib.get_close_matches(q, keys, n=25, cutoff=0.5)
+                for k in close:
+                    e = self.publications.get(k)
+                    if e:
+                        candidates.append({"key": e.get("key"), "title": e.get("title"), "pdf_url": e.get("pdf_url"), "tokens": []})
+
+            # Build choices, limit to 25 (Discord limit)
+            for item in candidates[:25]:
+                key = item.get("key")
+                title = item.get("title") or ""
+                # name should be user-friendly; value should be the key so selecting fills the query with the key
+                name = f"{key} — {title}"
+                # truncate name to 100 chars if necessary
+                if len(name) > 100:
+                    name = name[:97] + "..."
+                choices.append(app_commands.Choice(name=name, value=key))
+
+            return choices
+        except Exception:
+            # In case of any failure, return an empty list (no suggestions)
+            return []
+
     # -------------------- registration helpers --------------------
     async def setup_hook(self):
         """Cog-specific setup hook to register app_commands with the bot's tree."""

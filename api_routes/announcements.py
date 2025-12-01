@@ -67,8 +67,24 @@ def handle_announcements():
     elif guild_id is not None:
         target_channel_id = cfg.resolve_announcement_target_channel(guild_id, message_type)
     else:
-        # as a last resort, try to resolve announcement type via 0 (no guild) which will return None
-        target_channel_id = None
+        # No guild specified: prefer module-level channel_id in the announcement type config, then fall back
+        # to resolving a channel_key from a default/global guild config (guild 0) if provided.
+        channel_id_from_type = announce_config.get("channel_id")
+        if channel_id_from_type:
+            try:
+                target_channel_id = int(channel_id_from_type)
+            except Exception:
+                target_channel_id = None
+        else:
+            channel_key = announce_config.get("channel_key")
+            if channel_key:
+                # Attempt to resolve a global/default channel for the key (may be None)
+                try:
+                    target_channel_id = cfg.get_channel_for_guild(0, channel_key)
+                except Exception:
+                    target_channel_id = None
+            else:
+                target_channel_id = None
 
     color_value = announce_config.get("color")
     title_prefix = announce_config.get("title_prefix", "")

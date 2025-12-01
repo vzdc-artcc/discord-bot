@@ -60,15 +60,20 @@ def handle_announcements():
         return jsonify({"error": f"Unsupported message_type: {message_type}"}), 400
 
     announce_config = cfg.ANNOUNCEMENT_TYPES[message_type]
-    # Resolve target channel: prefer explicit channel override, then guild-config, then announce_config (which contains channel_key)
+
+    # Resolve target channel: prefer explicit channel override, then guild-config, then announce_config
     target_channel_id = None
+
     if channel_override:
-        target_channel_id = int(channel_override)
+        try:
+            target_channel_id = int(channel_override)
+        except Exception:
+            target_channel_id = None
     elif guild_id is not None:
         target_channel_id = cfg.resolve_announcement_target_channel(guild_id, message_type)
     else:
-        # No guild specified: prefer module-level channel_id in the announcement type config, then fall back
-        # to resolving a channel_key from any loaded guild config that has that channel configured.
+        # No guild specified: prefer module-level channel_id in announcement type config
+        # then fallback to resolving the channel_key against the default/global guild (0)
         channel_id_from_type = announce_config.get("channel_id")
         if channel_id_from_type:
             try:
@@ -78,33 +83,10 @@ def handle_announcements():
         else:
             channel_key = announce_config.get("channel_key")
             if channel_key:
-                # 1) try a configured default (guild 0) first
                 try:
                     target_channel_id = cfg.get_channel_for_guild(0, channel_key)
                 except Exception:
                     target_channel_id = None
-
-                # 2) if still not found, search all loaded guild configs for the first non-None value
-                if target_channel_id is None:
-                    try:
-                        # Log available guild configs for debugging
-                        loaded_guilds = list(getattr(cfg, "_guild_configs", {}).keys())
-                        logger.info(f"Announcement fallback: searching loaded guilds {loaded_guilds} for channel_key '{channel_key}'")
-                        found_gid = None
-                        for gid, gcfg in getattr(cfg, "_guild_configs", {}).items():
-                            ch = gcfg.get_channel(channel_key)
-                            logger.debug(f"Checking guild {gid} -> {channel_key} = {ch}")
-                            if ch:
-                                target_channel_id = ch
-                                found_gid = gid
-                                logger.info(f"Found fallback channel for '{message_type}' in guild {gid}: {ch}")
-                                break
-                        if found_gid is None:
-                            logger.info(f"No loaded guild had a configured '{channel_key}'")
-                    except Exception:
-                        target_channel_id = None
-            else:
-                target_channel_id = None
 
     logger.info(f"Announcement resolution: message_type={message_type}, channel_override={channel_override}, guild_id={guild_id}, resolved_channel={target_channel_id}")
 
@@ -121,7 +103,6 @@ def handle_announcements():
     if author_name:
         embed.set_author(name=author_name)
 
-    # Add optional fields in the embed footer
     footer_parts = []
     if author_staff_position:
         footer_parts.append(str(author_staff_position))
@@ -133,7 +114,6 @@ def handle_announcements():
     if banner_url:
         embed.set_image(url=banner_url)
 
-    # If caller requested a dry run, return the built message payload without sending to Discord.
     if dry_run:
         embed_payload = {
             "title": embed.title,
@@ -154,13 +134,11 @@ def handle_announcements():
         logger.info("Failed to determine target channel for announcement")
         return jsonify({"error": "Target channel could not be determined; provide channel_id or guild_id with configuration."}), 400
 
-    # Prepare coroutine to send message
     async def _send():
         bot = getattr(app, "bot", None)
         if bot is None:
             raise RuntimeError("Discord bot instance not available on Flask app")
 
-        # Try to get channel by cache first, then fetch if necessary
         channel = bot.get_channel(int(target_channel_id)) if target_channel_id is not None else None
         if channel is None:
             try:
@@ -169,11 +147,9 @@ def handle_announcements():
                 logger.exception(f"Failed to fetch channel {target_channel_id}: {e}")
                 raise
 
-        # Send the embed
         sent = await channel.send(embed=embed)
         return sent.id
 
-    # Run the coroutine on the bot event loop
     try:
         run_op = getattr(app, "run_discord_op", None)
         if run_op is None:
@@ -184,4 +160,3 @@ def handle_announcements():
     except Exception as e:
         logger.exception(f"Failed to post announcement: {e}")
         return jsonify({"error": "Failed to post announcement", "detail": str(e)}), 500
-

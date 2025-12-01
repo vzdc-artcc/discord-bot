@@ -68,7 +68,7 @@ def handle_announcements():
         target_channel_id = cfg.resolve_announcement_target_channel(guild_id, message_type)
     else:
         # No guild specified: prefer module-level channel_id in the announcement type config, then fall back
-        # to resolving a channel_key from a default/global guild config (guild 0) if provided.
+        # to resolving a channel_key from any loaded guild config that has that channel configured.
         channel_id_from_type = announce_config.get("channel_id")
         if channel_id_from_type:
             try:
@@ -78,13 +78,35 @@ def handle_announcements():
         else:
             channel_key = announce_config.get("channel_key")
             if channel_key:
-                # Attempt to resolve a global/default channel for the key (may be None)
+                # 1) try a configured default (guild 0) first
                 try:
                     target_channel_id = cfg.get_channel_for_guild(0, channel_key)
                 except Exception:
                     target_channel_id = None
+
+                # 2) if still not found, search all loaded guild configs for the first non-None value
+                if target_channel_id is None:
+                    try:
+                        # Log available guild configs for debugging
+                        loaded_guilds = list(getattr(cfg, "_guild_configs", {}).keys())
+                        logger.info(f"Announcement fallback: searching loaded guilds {loaded_guilds} for channel_key '{channel_key}'")
+                        found_gid = None
+                        for gid, gcfg in getattr(cfg, "_guild_configs", {}).items():
+                            ch = gcfg.get_channel(channel_key)
+                            logger.debug(f"Checking guild {gid} -> {channel_key} = {ch}")
+                            if ch:
+                                target_channel_id = ch
+                                found_gid = gid
+                                logger.info(f"Found fallback channel for '{message_type}' in guild {gid}: {ch}")
+                                break
+                        if found_gid is None:
+                            logger.info(f"No loaded guild had a configured '{channel_key}'")
+                    except Exception:
+                        target_channel_id = None
             else:
                 target_channel_id = None
+
+    logger.info(f"Announcement resolution: message_type={message_type}, channel_override={channel_override}, guild_id={guild_id}, resolved_channel={target_channel_id}")
 
     color_value = announce_config.get("color")
     title_prefix = announce_config.get("title_prefix", "")

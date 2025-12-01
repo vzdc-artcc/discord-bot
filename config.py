@@ -250,6 +250,11 @@ ANNOUNCEMENT_TYPES = {
         "color": discord.Color.gold().value,
         "title_prefix": "🗓️ Event Announcement:"
     },
+    "event-posting": {
+        "channel_key": "event_announcement_channel_id",
+        "color": discord.Color.gold().value,
+        "title_prefix": "🗓️ Event Announcement:"
+    },
     "training": {
         "channel_key": "training_announcement_channel_id",
         "color": discord.Color.green().value,

@@ -14,6 +14,23 @@ bp = Blueprint("event_position_posting", __name__, url_prefix="/event_position_p
 def _safe_get(d: Dict[str, Any], key: str, default=None):
     return d.get(key, default) if isinstance(d, dict) else default
 
+RATING_ID_TO_SHORT = {
+    -1: "INA",
+    0: "SUS",
+    1: "OBS",
+    2: "S1",
+    3: "S2",
+    4: "S3",
+    5: "C1",
+    6: "C2",
+    7: "C3",
+    8: "I1",
+    9: "I2",
+    10: "I3",
+    11: "SUP",
+    12: "ADM",
+}
+
 
 @bp.route("", methods=["POST"])  # POST /event_position_posting
 @api_key_required
@@ -129,7 +146,32 @@ def post_event_position_posting():
         name = _safe_get(c, "controller_name") or "(Unnamed)"
         rating = _safe_get(c, "controller_rating")
         # format rating consistently as string if present
-        rating_str = f"{rating}" if rating is not None else ""
+        rating_str = ""
+        if rating is not None:
+            # If rating is an integer (or numeric string), map using RATING_ID_TO_SHORT
+            try:
+                # handle ints directly
+                if isinstance(rating, int):
+                    rating_str = RATING_ID_TO_SHORT.get(rating, str(rating))
+                else:
+                    rs = str(rating).strip()
+                    # numeric string (e.g. "5")
+                    if rs.lstrip("+-").isdigit():
+                        try:
+                            rid = int(rs)
+                            rating_str = RATING_ID_TO_SHORT.get(rid, rs)
+                        except Exception:
+                            rating_str = rs.upper()
+                    else:
+                        # If the provided value is already a known short code, normalize it.
+                        up = rs.upper()
+                        if up in set(RATING_ID_TO_SHORT.values()):
+                            rating_str = up
+                        else:
+                            # Fallback: use the string representation (uppercased for consistency)
+                            rating_str = up
+            except Exception:
+                rating_str = str(rating)
 
         # readable line for this controller
         if rating_str:

@@ -173,7 +173,8 @@ class Staffup(commands.Cog):
                                 else:
                                     embed.add_field(name="Session Info", value="Time data unavailable", inline=False)
 
-                                embed.set_footer(text="vZDC Controller Status")
+                                embed.timestamp = datetime.now(timezone.utc)
+                                embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
 
                                 # send to all configured staffup channels across guilds
                                 for guild in self.bot.guilds:
@@ -250,7 +251,8 @@ class Staffup(commands.Cog):
                                     except Exception as e:
                                         logger.exception("Error processing additional position for %s: %s", online_ctrl_data['vatsimData'].get('callsign'), e)
 
-                                embed.set_footer(text="vZDC Controller Status")
+                                embed.timestamp = datetime.now(timezone.utc)
+                                embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
 
                                 # send to all configured staffup channels across guilds
                                 for guild in self.bot.guilds:

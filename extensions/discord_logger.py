@@ -3,7 +3,7 @@ from discord.ext import commands
 import config
 import logging
 from datetime import datetime, timezone
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Union
 
 logger = logging.getLogger("discord_logger")
 
@@ -18,6 +18,25 @@ def _truncate(text: Optional[str], max_len: int = MAX_FIELD_LENGTH) -> str:
     if len(s) <= max_len:
         return s
     return s[: max_len - 12] + "...[truncated]"
+
+
+def _user_fields(user: Optional[Union[discord.User, discord.Member, discord.abc.User]]):
+    """Return a tuple (mention, id_str, display_name) suitable for three inline embed fields.
+
+    If user is None, return placeholders.
+    """
+    if user is None:
+        return ("(unknown)", "(unknown)", "(unknown)")
+    mention = getattr(user, "mention", f"<@{getattr(user, 'id', 'unknown')}>")
+    uid = str(getattr(user, "id", "unknown"))
+    uname = getattr(user, "display_name", None) or getattr(user, "name", None) or repr(user)
+    return (mention, uid, uname)
+
+
+def _user_info_line(user: Optional[Union[discord.User, discord.Member, discord.abc.User]]):
+    """Compatibility helper: single-line user info (kept for backward compatibility)."""
+    mention, uid, uname = _user_fields(user)
+    return f"User: {mention} | UserID: {uid} | UserName: {uname}"
 
 
 def _format_footer(author_id: Optional[int], message_id: Optional[int], ts: Optional[datetime]) -> str:
@@ -139,9 +158,19 @@ class DiscordLogger(commands.Cog):
         channel = await self._resolve_channel(guild)
         if channel is None:
             return
-        desc = f"Member: {member} (ID {member.id}) joined. Account created: {member.created_at.isoformat()}"
-        embed = self._build_basic_embed("🟢 Member Join", discord.Color.green(), desc)
+        embed = self._build_basic_embed("🟢 Member Join", discord.Color.green())
+        # Add inline user fields
+        mention, uid, uname = _user_fields(member)
+        embed.add_field(name="User", value=mention, inline=True)
+        embed.add_field(name="UserID", value=uid, inline=True)
+        embed.add_field(name="UserName", value=uname, inline=True)
+        # Details field contains event-specific lines
+        details = f"Member joined. Account created: {member.created_at.isoformat()}"
+        embed.add_field(name="Details", value=_truncate(details), inline=False)
         embed.set_thumbnail(url=getattr(member.display_avatar, "url", None))
+        # Uniform timestamp + footer
+        embed.timestamp = datetime.now(timezone.utc)
+        embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
         await self._safe_send(channel, embed=embed)
 
     @commands.Cog.listener()
@@ -155,15 +184,23 @@ class DiscordLogger(commands.Cog):
         # Try to determine if this was a kick via audit logs
         actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.kick, target_id=member.id)
         title = "🔴 Member Removed"
-        desc_lines = [f"Member: {member} (ID {member.id})"]
+        embed = self._build_basic_embed(title, discord.Color.red())
+        # Subject user fields (the member who left)
+        mention, uid, uname = _user_fields(member)
+        embed.add_field(name="User", value=mention, inline=True)
+        embed.add_field(name="UserID", value=uid, inline=True)
+        embed.add_field(name="UserName", value=uname, inline=True)
+        details_lines = []
         if actor:
-            desc_lines.append(f"Removed by: {actor} (ID {actor.id})")
+            details_lines.append(f"Removed by: {actor} (ID {actor.id})")
         else:
-            desc_lines.append("Removed by: (unknown)")
+            details_lines.append("Removed by: (unknown)")
         if reason:
-            desc_lines.append(f"Reason: {reason}")
-        desc = "\n".join(desc_lines)
-        embed = self._build_basic_embed(title, discord.Color.red(), desc)
+            details_lines.append(f"Reason: {reason}")
+        embed.add_field(name="Details", value=_truncate("\n".join(details_lines)), inline=False)
+        # Uniform timestamp + footer
+        embed.timestamp = datetime.now(timezone.utc)
+        embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
         await self._safe_send(channel, embed=embed)
 
     @commands.Cog.listener()
@@ -173,14 +210,22 @@ class DiscordLogger(commands.Cog):
             return
         actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.ban, target_id=user.id)
         title = "🔨 Member Banned"
-        desc_lines = [f"User: {user} (ID {user.id})"]
+        embed = self._build_basic_embed(title, discord.Color.dark_red())
+        mention, uid, uname = _user_fields(user)
+        embed.add_field(name="User", value=mention, inline=True)
+        embed.add_field(name="UserID", value=uid, inline=True)
+        embed.add_field(name="UserName", value=uname, inline=True)
+        details_lines = []
         if actor:
-            desc_lines.append(f"Banned by: {actor} (ID {actor.id})")
+            details_lines.append(f"Banned by: {actor} (ID {actor.id})")
         else:
-            desc_lines.append("Banned by: (unknown)")
+            details_lines.append("Banned by: (unknown)")
         if reason:
-            desc_lines.append(f"Reason: {reason}")
-        embed = self._build_basic_embed(title, discord.Color.dark_red(), "\n".join(desc_lines))
+            details_lines.append(f"Reason: {reason}")
+        embed.add_field(name="Details", value=_truncate("\n".join(details_lines)), inline=False)
+        # Uniform timestamp + footer
+        embed.timestamp = datetime.now(timezone.utc)
+        embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
         await self._safe_send(channel, embed=embed)
 
     @commands.Cog.listener()
@@ -190,14 +235,22 @@ class DiscordLogger(commands.Cog):
             return
         actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.unban, target_id=user.id)
         title = "🟡 Member Unbanned"
-        desc_lines = [f"User: {user} (ID {user.id})"]
+        embed = self._build_basic_embed(title, discord.Color.gold())
+        mention, uid, uname = _user_fields(user)
+        embed.add_field(name="User", value=mention, inline=True)
+        embed.add_field(name="UserID", value=uid, inline=True)
+        embed.add_field(name="UserName", value=uname, inline=True)
+        details_lines = []
         if actor:
-            desc_lines.append(f"Unbanned by: {actor} (ID {actor.id})")
+            details_lines.append(f"Unbanned by: {actor} (ID {actor.id})")
         else:
-            desc_lines.append("Unbanned by: (unknown)")
+            details_lines.append("Unbanned by: (unknown)")
         if reason:
-            desc_lines.append(f"Reason: {reason}")
-        embed = self._build_basic_embed(title, discord.Color.gold(), "\n".join(desc_lines))
+            details_lines.append(f"Reason: {reason}")
+        embed.add_field(name="Details", value=_truncate("\n".join(details_lines)), inline=False)
+        # Uniform timestamp + footer
+        embed.timestamp = datetime.now(timezone.utc)
+        embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
         await self._safe_send(channel, embed=embed)
 
     @commands.Cog.listener()
@@ -208,12 +261,20 @@ class DiscordLogger(commands.Cog):
             return
         actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.role_create, target_id=role.id)
         title = "🔧 Role Created"
-        desc = f"Role: {role.name} (ID {role.id}) created"
+        embed = self._build_basic_embed(title, discord.Color.orange())
+        mention, uid, uname = _user_fields(actor)
+        embed.add_field(name="User", value=mention, inline=True)
+        embed.add_field(name="UserID", value=uid, inline=True)
+        embed.add_field(name="UserName", value=uname, inline=True)
+        details = f"Role: {role.name} (ID {role.id}) created"
         if actor:
-            desc += f" by {actor} (ID {actor.id})"
+            details += f" by {actor} (ID {actor.id})"
         if reason:
-            desc += f" — Reason: {reason}"
-        embed = self._build_basic_embed(title, discord.Color.orange(), desc)
+            details += f" — Reason: {reason}"
+        embed.add_field(name="Details", value=_truncate(details), inline=False)
+        # Uniform timestamp + footer
+        embed.timestamp = datetime.now(timezone.utc)
+        embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
         await self._safe_send(channel, embed=embed)
 
     @commands.Cog.listener()
@@ -224,12 +285,20 @@ class DiscordLogger(commands.Cog):
             return
         actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.role_delete, target_id=role.id)
         title = "🗑️ Role Deleted"
-        desc = f"Role: {role.name} (ID {role.id}) deleted"
+        embed = self._build_basic_embed(title, discord.Color.dark_grey())
+        mention, uid, uname = _user_fields(actor)
+        embed.add_field(name="User", value=mention, inline=True)
+        embed.add_field(name="UserID", value=uid, inline=True)
+        embed.add_field(name="UserName", value=uname, inline=True)
+        details = f"Role: {role.name} (ID {role.id}) deleted"
         if actor:
-            desc += f" by {actor} (ID {actor.id})"
+            details += f" by {actor} (ID {actor.id})"
         if reason:
-            desc += f" — Reason: {reason}"
-        embed = self._build_basic_embed(title, discord.Color.dark_grey(), desc)
+            details += f" — Reason: {reason}"
+        embed.add_field(name="Details", value=_truncate(details), inline=False)
+        # Uniform timestamp + footer
+        embed.timestamp = datetime.now(timezone.utc)
+        embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
         await self._safe_send(channel, embed=embed)
 
     @commands.Cog.listener()
@@ -251,12 +320,20 @@ class DiscordLogger(commands.Cog):
             diffs.append(f"Hoist changed: {before.hoist} -> {after.hoist}")
         if not diffs:
             diffs.append("No visible changes")
-        desc = f"Role: {after.name} (ID {after.id})\n" + "; ".join(diffs)
+        embed = self._build_basic_embed(title, discord.Color.blue())
+        mention, uid, uname = _user_fields(actor)
+        embed.add_field(name="User", value=mention, inline=True)
+        embed.add_field(name="UserID", value=uid, inline=True)
+        embed.add_field(name="UserName", value=uname, inline=True)
+        details = f"Role: {after.name} (ID {after.id})\n" + "; ".join(diffs)
         if actor:
-            desc += f"\nEdited by: {actor} (ID {actor.id})"
+            details += f"\nEdited by: {actor} (ID {actor.id})"
         if reason:
-            desc += f"\nReason: {reason}"
-        embed = self._build_basic_embed(title, discord.Color.blue(), desc)
+            details += f"\nReason: {reason}"
+        embed.add_field(name="Details", value=_truncate(details), inline=False)
+        # Uniform timestamp + footer
+        embed.timestamp = datetime.now(timezone.utc)
+        embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
         await self._safe_send(channel, embed=embed)
 
     @commands.Cog.listener()
@@ -275,21 +352,32 @@ class DiscordLogger(commands.Cog):
         # Try to attribute via audit logs (best-effort)
         actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.member_role_update, target_id=after.id)
         title = "🧾 Member Roles Updated"
-        parts: List[str] = [f"Member: {after} (ID {after.id})"]
+        embed = self._build_basic_embed(title, discord.Color.purple())
+        # Subject is the member whose roles changed
+        mention, uid, uname = _user_fields(after)
+        embed.add_field(name="User", value=mention, inline=True)
+        embed.add_field(name="UserID", value=uid, inline=True)
+        embed.add_field(name="UserName", value=uname, inline=True)
+        parts: List[str] = []
         if added:
             parts.append("Added roles: " + ", ".join(r.name for r in added))
         if removed:
             parts.append("Removed roles: " + ", ".join(r.name for r in removed))
         if actor:
-            parts.append(f"By: {actor} (ID {actor.id})")
+            actor_mention = getattr(actor, "mention", f"<@{getattr(actor, 'id', 'unknown')}>")
+            embed.add_field(name="Edited by", value=actor_mention)
         else:
-            parts.append("By: (unknown)")
+            embed.add_field()
         if reason:
             parts.append(f"Reason: {reason}")
-        embed = self._build_basic_embed(title, discord.Color.purple(), "\n".join(parts))
+        embed.add_field(name="Details", value=_truncate("\n".join(parts)), inline=False)
+        # Uniform timestamp + footer
+        embed.timestamp = datetime.now(timezone.utc)
+        embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
         await self._safe_send(channel, embed=embed)
 
     @commands.Cog.listener()
+    # python
     async def on_message_delete(self, message: discord.Message):
         guild = message.guild
         if guild is None:
@@ -300,40 +388,33 @@ class DiscordLogger(commands.Cog):
         # message may be partial (not cached)
         author = getattr(message, "author", None)
         title = "🗑️ Message Deleted"
-        # Put identifying info in the description
-        desc_parts = [f"Channel: {getattr(message.channel, 'name', repr(message.channel))} (ID {getattr(message.channel, 'id', 'unknown')})"]
-        if author:
-            desc_parts.append(f"Author: {author} (ID {author.id})")
-        desc_parts.append(f"Message ID: {getattr(message, 'id', 'unknown')}")
-        embed = self._build_basic_embed(title, discord.Color.dark_grey(), "\n".join(desc_parts))
+        embed = self._build_basic_embed(title, discord.Color.dark_grey())
+        mention, uid, uname = _user_fields(author)
+        embed.add_field(name="User", value=mention, inline=True)
+        embed.add_field(name="UserID", value=uid, inline=True)
+        embed.add_field(name="UserName", value=uname, inline=True)
+        # Message ID as details
+        embed.add_field(name="Details", value=f"Message ID: {getattr(message, 'id', 'unknown')}", inline=False)
 
-        # Content field (use embed field so it displays cleanly)
+        # Channel field using mention (clickable). Use .mention when available, fall back to <#id>.
+        ch = getattr(message, "channel", None)
+        ch_mention = getattr(ch, "mention", f"<#{getattr(ch, 'id', 'unknown')}>")
+        try:
+            embed.add_field(name="Channel", value=ch_mention, inline=False)
+        except Exception:
+            embed.description = (embed.description or "") + "\nChannel: " + ch_mention
+
         content = getattr(message, "content", None)
         content_value = _truncate(content) if content else "(unavailable)"
         try:
             embed.add_field(name="Content", value=content_value, inline=False)
         except Exception:
-            # Fall back to appending to description
             embed.description = (embed.description or "") + "\nContent: " + content_value
 
-        # Attachments as a separate field when present
-        try:
-            attachments = getattr(message, "attachments", []) or []
-            if attachments:
-                # Prefer listing URLs if short; otherwise show a count
-                att_urls = ", ".join(getattr(a, 'url', str(a)) for a in attachments)
-                if len(att_urls) <= MAX_FIELD_LENGTH:
-                    embed.add_field(name="Attachments", value=att_urls, inline=False)
-                else:
-                    embed.add_field(name="Attachments", value=f"{len(attachments)} attachment(s)", inline=False)
-        except Exception:
-            # Ignore attachment formatting failures
-            pass
-
-        # Footer with author/id and message timestamp
-        footer_text = _format_footer(getattr(author, 'id', None), getattr(message, 'id', None), getattr(message, 'created_at', None))
-        if footer_text:
-            embed.set_footer(text=footer_text)
+        # attachments, footer, send...
+        # Use uniform footer + timestamp per request (previously used a custom footer for message metadata)
+        embed.timestamp = datetime.now(timezone.utc)
+        embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
         await self._safe_send(channel, embed=embed)
 
     @commands.Cog.listener()
@@ -354,8 +435,18 @@ class DiscordLogger(commands.Cog):
             chans[ch] += 1
         lines = [f"Total messages deleted: {len(messages)}"]
         for ch_id, cnt in chans.items():
-            lines.append(f"Channel ID {ch_id}: {cnt} messages")
-        embed = self._build_basic_embed(title, discord.Color.dark_grey(), "\n".join(lines))
+            if ch_id is None:
+                lines.append(f"Channel: (unknown): {cnt} messages")
+            else:
+                lines.append(f"Channel: <#{ch_id}>: {cnt} messages")
+        embed = self._build_basic_embed(title, discord.Color.dark_grey())
+        embed.add_field(name="User", value="(multiple)", inline=True)
+        embed.add_field(name="UserID", value="(n/a)", inline=True)
+        embed.add_field(name="UserName", value="(n/a)", inline=True)
+        embed.add_field(name="Details", value=_truncate("\n".join(lines)), inline=False)
+        # Uniform timestamp + footer
+        embed.timestamp = datetime.now(timezone.utc)
+        embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
         await self._safe_send(channel, embed=embed)
 
     @commands.Cog.listener()
@@ -369,11 +460,15 @@ class DiscordLogger(commands.Cog):
         if channel is None:
             return
         title = "✍️ Message Edited"
-        # Keep short identifying info in the description
-        desc_parts = [f"Channel: {getattr(after.channel, 'name', repr(after.channel))} (ID {getattr(after.channel, 'id', 'unknown')})"]
-        desc_parts.append(f"Author: {getattr(after.author, 'name', repr(after.author))} (ID {getattr(after.author, 'id', 'unknown')})")
-        desc_parts.append(f"Message ID: {after.id}")
-        embed = self._build_basic_embed(title, discord.Color.dark_blue(), "\n".join(desc_parts))
+        embed = self._build_basic_embed(title, discord.Color.dark_blue())
+        author = getattr(after, 'author', None)
+        mention, uid, uname = _user_fields(author)
+        embed.add_field(name="User", value=mention, inline=True)
+        embed.add_field(name="UserID", value=uid, inline=True)
+        embed.add_field(name="UserName", value=uname, inline=True)
+        ch = getattr(after, 'channel', None)
+        ch_mention = getattr(ch, 'mention', f"<#{getattr(ch, 'id', 'unknown')}>")
+        embed.add_field(name="Details", value=f"Channel: {ch_mention} (ID {getattr(ch, 'id', 'unknown')})\nMessage ID: {after.id}", inline=False)
 
         # Add Before/After as dedicated fields (non-inline) so they render cleanly
         before_content = _truncate(getattr(before, 'content', None)) or "(unavailable)"
@@ -388,10 +483,9 @@ class DiscordLogger(commands.Cog):
         except Exception:
             embed.description = (embed.description or "") + "\nAfter: " + after_content
 
-        # Footer with author/id and message timestamp
-        footer_text = _format_footer(getattr(after.author, 'id', None), getattr(after, 'id', None), getattr(after, 'created_at', None))
-        if footer_text:
-            embed.set_footer(text=footer_text)
+        # Uniform timestamp + footer
+        embed.timestamp = datetime.now(timezone.utc)
+        embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
         await self._safe_send(channel, embed=embed)
 
     @commands.Cog.listener()
@@ -402,12 +496,18 @@ class DiscordLogger(commands.Cog):
             return
         actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.channel_create, target_id=channel.id)
         title = "📁 Channel Created"
-        desc = f"Channel: {channel.name} (ID {channel.id}) Type: {type(channel).__name__}"
+        # Use actor as the user when available
+        user_line = _user_info_line(actor)
+        ch_mention = getattr(channel, 'mention', f"<#{getattr(channel, 'id', 'unknown')}>")
+        desc = f"{user_line}\n\nChannel: {ch_mention} (ID {channel.id}) Type: {type(channel).__name__}"
         if actor:
             desc += f" by {actor} (ID {actor.id})"
         if reason:
             desc += f" — Reason: {reason}"
         embed = self._build_basic_embed(title, discord.Color.teal(), desc)
+        # Uniform timestamp + footer
+        embed.timestamp = datetime.now(timezone.utc)
+        embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
         await self._safe_send(ch, embed=embed)
 
     @commands.Cog.listener()
@@ -418,12 +518,17 @@ class DiscordLogger(commands.Cog):
             return
         actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.channel_delete, target_id=channel.id)
         title = "🗑️ Channel Deleted"
-        desc = f"Channel: {getattr(channel, 'name', '(deleted)')} (ID {channel.id})"
+        user_line = _user_info_line(actor)
+        ch_mention = getattr(channel, 'mention', f"<#{getattr(channel, 'id', 'unknown')}>")
+        desc = f"{user_line}\n\nChannel: {getattr(channel, 'name', '(deleted)')} ({ch_mention} | ID {channel.id})"
         if actor:
             desc += f" by {actor} (ID {actor.id})"
         if reason:
             desc += f" — Reason: {reason}"
         embed = self._build_basic_embed(title, discord.Color.dark_grey(), desc)
+        # Uniform timestamp + footer
+        embed.timestamp = datetime.now(timezone.utc)
+        embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
         await self._safe_send(ch, embed=embed)
 
     @commands.Cog.listener()
@@ -444,12 +549,21 @@ class DiscordLogger(commands.Cog):
             diffs.append("Channel properties changed")
         if not diffs:
             diffs.append("No visible changes")
-        desc = f"Channel: {getattr(after, 'name', repr(after))} (ID {after.id})\n" + "; ".join(diffs)
+        embed = self._build_basic_embed(title, discord.Color.gold())
+        mention, uid, uname = _user_fields(actor)
+        embed.add_field(name="User", value=mention, inline=True)
+        embed.add_field(name="UserID", value=uid, inline=True)
+        embed.add_field(name="UserName", value=uname, inline=True)
+        after_mention = getattr(after, 'mention', f"<#{getattr(after, 'id', 'unknown')}>")
+        details = f"Channel: {after_mention} (ID {after.id})\n" + "; ".join(diffs)
         if actor:
-            desc += f"\nEdited by: {actor} (ID {actor.id})"
+            details += f"\nEdited by: {actor} (ID {actor.id})"
         if reason:
-            desc += f"\nReason: {reason}"
-        embed = self._build_basic_embed(title, discord.Color.gold(), desc)
+            details += f"\nReason: {reason}"
+        embed.add_field(name="Details", value=_truncate(details), inline=False)
+        # Uniform timestamp + footer
+        embed.timestamp = datetime.now(timezone.utc)
+        embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
         await self._safe_send(ch, embed=embed)
 
     @commands.Cog.listener()
@@ -463,16 +577,37 @@ class DiscordLogger(commands.Cog):
         a = getattr(after, 'channel', None)
         if b is None and a is not None:
             title = "🔊 Voice Channel Join"
-            desc = f"Member: {member} joined {a.name} (ID {a.id})"
+            embed = self._build_basic_embed(title, discord.Color.blurple())
+            mention, uid, uname = _user_fields(member)
+            embed.add_field(name="User", value=mention, inline=True)
+            embed.add_field(name="UserID", value=uid, inline=True)
+            embed.add_field(name="UserName", value=uname, inline=True)
+            a_mention = getattr(a, 'mention', f"<#{getattr(a, 'id', 'unknown')}>")
+            embed.add_field(name="Details", value=f"Member joined {a_mention} (ID {getattr(a, 'id', 'unknown')})", inline=False)
         elif b is not None and a is None:
             title = "🔇 Voice Channel Leave"
-            desc = f"Member: {member} left {b.name} (ID {b.id})"
+            embed = self._build_basic_embed(title, discord.Color.blurple())
+            mention, uid, uname = _user_fields(member)
+            embed.add_field(name="User", value=mention, inline=True)
+            embed.add_field(name="UserID", value=uid, inline=True)
+            embed.add_field(name="UserName", value=uname, inline=True)
+            b_mention = getattr(b, 'mention', f"<#{getattr(b, 'id', 'unknown')}>")
+            embed.add_field(name="Details", value=f"Member left {b_mention} (ID {getattr(b, 'id', 'unknown')})", inline=False)
         elif b is not None and a is not None and b.id != a.id:
             title = "🔀 Voice Channel Move"
-            desc = f"Member: {member} moved {b.name} (ID {b.id}) -> {a.name} (ID {a.id})"
+            embed = self._build_basic_embed(title, discord.Color.blurple())
+            mention, uid, uname = _user_fields(member)
+            embed.add_field(name="User", value=mention, inline=True)
+            embed.add_field(name="UserID", value=uid, inline=True)
+            embed.add_field(name="UserName", value=uname, inline=True)
+            b_mention = getattr(b, 'mention', f"<#{getattr(b, 'id', 'unknown')}>")
+            a_mention = getattr(a, 'mention', f"<#{getattr(a, 'id', 'unknown')}>")
+            embed.add_field(name="Details", value=f"Member moved {b_mention} (ID {getattr(b, 'id', 'unknown')}) -> {a_mention} (ID {getattr(a, 'id', 'unknown')})", inline=False)
         else:
             return
-        embed = self._build_basic_embed(title, discord.Color.blurple(), desc)
+        # Uniform timestamp + footer
+        embed.timestamp = datetime.now(timezone.utc)
+        embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
         await self._safe_send(channel, embed=embed)
 
 

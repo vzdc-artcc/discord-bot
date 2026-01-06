@@ -45,7 +45,7 @@ class APIServer(commands.Cog):  # Renamed to APIServer
         self.blueprint_modules = [
             "api_routes.announcements",
             "api_routes.event_position_posting",
-            "api_routes.regular_event_reminder",
+            "api_routes.weekly_event_reminder",
             "api_routes.user_role_sync",
         ]
         self._register_blueprints()

@@ -7,7 +7,7 @@ from utils.vatsim import parse_vatsim_logon_time
 from extensions.api_server import app, api_key_required
 import config as cfg
 
-bp = Blueprint("regular_event_reminder", __name__, url_prefix="/regular_event_reminder")
+bp = Blueprint("weekly_event_reminder", __name__, url_prefix="/weekly_event_reminder")
 
 
 def _safe_get(d: Dict[str, Any], key: str, default=None):
@@ -16,7 +16,7 @@ def _safe_get(d: Dict[str, Any], key: str, default=None):
 
 @bp.route("", methods=["POST"])  # POST /regular_event_reminder
 @api_key_required
-def post_regular_event_reminder():
+def post_weekly_event_reminder():
     """Accepts a payload with a list of events for the week and posts an embed for each
 
     Expected JSON shape includes either `guild_id` or `channel_id` to determine where the message should be posted.
@@ -259,6 +259,8 @@ def post_regular_event_reminder():
             view = None
 
         embeds.append((embed, view, montage_bytes))
+        embed.timestamp = datetime.now(timezone.utc)
+        embed.set_footer(text="vZDC", icon_url=guild_id.icon.url if guild_id.icon else None)
 
     # Send all embeds sequentially to the configured channel using Flask app helper
 

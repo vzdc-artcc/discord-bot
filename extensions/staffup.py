@@ -173,8 +173,6 @@ class Staffup(commands.Cog):
                                 else:
                                     embed.add_field(name="Session Info", value="Time data unavailable", inline=False)
 
-                                embed.timestamp = datetime.now(timezone.utc)
-                                embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
 
                                 # send to all configured staffup channels across guilds
                                 for guild in self.bot.guilds:
@@ -190,6 +188,8 @@ class Staffup(commands.Cog):
                                     if staffup_channel is None:
                                         continue
                                     try:
+                                        embed.timestamp = datetime.now(timezone.utc)
+                                        embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
                                         await staffup_channel.send(embed=embed)
                                         logger.info(f"Sent offline message for: {offline_ctrl_data['vatsimData']['callsign']} to guild {guild.id}")
                                     except Exception as e:
@@ -250,10 +250,6 @@ class Staffup(commands.Cog):
                                         embed.add_field(name="Additional Position", value=f"{pos.get('facilityName')} - {label} ({freq_str})", inline=True)
                                     except Exception as e:
                                         logger.exception("Error processing additional position for %s: %s", online_ctrl_data['vatsimData'].get('callsign'), e)
-
-                                embed.timestamp = datetime.now(timezone.utc)
-                                embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
-
                                 # send to all configured staffup channels across guilds
                                 for guild in self.bot.guilds:
                                     channel_id = cfg.get_channel_for_guild(guild.id, "staffup_channel")
@@ -268,6 +264,8 @@ class Staffup(commands.Cog):
                                     if staffup_channel is None:
                                         continue
                                     try:
+                                        embed.timestamp = datetime.now(timezone.utc)
+                                        embed.set_footer(text="vZDC", icon_url=guild.icon.url if guild.icon else None)
                                         await staffup_channel.send(embed=embed)
                                         logger.info(f"Sent online message for: {online_ctrl_data['vatsimData']['callsign']} to guild {guild.id}")
                                     except Exception as e:

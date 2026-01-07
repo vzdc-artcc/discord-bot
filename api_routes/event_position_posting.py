@@ -182,7 +182,7 @@ def post_event_position_posting():
         category_groups.setdefault(category, []).append(line)
 
     # Preferred display order for categories, fall back to remaining sorted keys
-    preferred_order = ["RMP", "DEL", "GND", "TWR", "APP", "CTR", "DEP", "OTHER", "UNKNOWN"]
+    preferred_order = ["RMP", "DEL", "GND", "TWR", "DEP", "APP", "CTR", "CIC", "TMU", "OTHER", "UNKNOWN"]
     remaining = [k for k in category_groups.keys() if k not in preferred_order]
     ordered_keys = [k for k in preferred_order if k in category_groups] + sorted(remaining)
 

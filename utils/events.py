@@ -56,6 +56,10 @@ def parse_position(position_str: str) -> str:
         return "APP"
     elif position_str == ["MANNE + BARIN"]:
         return "APP"
+    elif position_str == ["TMU"]:
+        return "TMU"
+    elif position_str == ["CIC"]:
+        return "CIC"
     else:
         return "UNKNOWN"
 

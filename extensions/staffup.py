@@ -76,8 +76,6 @@ class Staffup(commands.Cog):
     @tasks.loop(seconds=10.0)
     async def check_online_controllers(self):
         """Check for online controllers and update Staffup accordingly."""
-        logger.info("Checking online controllers for Staffup update...")
-        # use instance list
         online_ref = self.online_zdc_controllers
 
         try:

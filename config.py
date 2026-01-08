@@ -127,7 +127,10 @@ def _load_guild_configs_from_disk():
                       "impromptu_twr": 1441543998153031761,
                       "impromptu_gnd": 1441543041633489048
                     },
-                    "announcement_types": {}
+                    "announcement_types": {},
+                    "categories": {
+                        "training_channels_category_id": 1441295058811752478
+                    }
                   },
                   "391802941486530561": {
                     "channels": {
@@ -153,7 +156,10 @@ def _load_guild_configs_from_disk():
                       "impromptu_twr": 816170084958470145,
                       "impromptu_gnd": 816169915945844736
                     },
-                    "announcement_types": {}
+                    "announcement_types": {},
+                    "categories": {
+                        "training_channels_category_id": 1358860867503919154
+                    }
                   }
         }
 

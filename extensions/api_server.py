@@ -47,6 +47,7 @@ class APIServer(commands.Cog):  # Renamed to APIServer
             "api_routes.event_position_posting",
             "api_routes.weekly_event_reminder",
             "api_routes.user_role_sync",
+            "api_routes.create_training_channel",
         ]
         self._register_blueprints()
 

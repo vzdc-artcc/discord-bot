@@ -1,10 +1,14 @@
+# python
 from flask import Blueprint, request, jsonify
 from extensions.api_server import app, api_key_required
 import discord
 import re
 import config as cfg
+import logging
 
 bp = Blueprint("create_training_channel", __name__, url_prefix="/create_training_channel")
+
+logger = logging.getLogger(__name__)
 
 
 def _slugify(s: str) -> str:
@@ -30,7 +34,11 @@ def create_training_channel():
     """
 
     data = request.get_json(silent=True)
+    logger.debug("create_training_channel called")
+    logger.debug("Request JSON payload: %s", data)
+
     if not data:
+        logger.warning("Invalid or missing JSON body")
         return jsonify({"error": "Invalid or missing JSON body"}), 400
 
     student = data.get("student")
@@ -39,16 +47,19 @@ def create_training_channel():
 
     # Basic validation
     if not student or not primary:
+        logger.warning("Missing required student or primaryTrainer object")
         return jsonify({"error": "Missing required student or primaryTrainer object"}), 400
 
     try:
         student_uid = int(student.get("discordUid"))
     except Exception:
+        logger.warning("student.discordUid is required and must be an integer: %r", student.get("discordUid"))
         return jsonify({"error": "student.discordUid is required and must be an integer"}), 400
 
     try:
         primary_uid = int(primary.get("discordUid"))
     except Exception:
+        logger.debug("primaryTrainer.discordUid missing or invalid; continuing without resolved primary member")
         primary_uid = None
 
     other_uids = []
@@ -56,7 +67,7 @@ def create_training_channel():
         try:
             other_uids.append(int(o.get("discordUid")))
         except Exception:
-            # skip entries without valid discordUid
+            logger.debug("Skipping otherTrainer with invalid discordUid: %r", o)
             continue
 
     first = student.get("firstName") or ""
@@ -64,20 +75,25 @@ def create_training_channel():
     cid = student.get("cid") or ""
 
     if not (first and last and cid):
+        logger.warning("Missing required student name/cid fields: first=%r last=%r cid=%r", first, last, cid)
         return jsonify({"error": "student.firstName, student.lastName and student.cid are required"}), 400
 
     raw_name = f"{first}-{last}-{cid}"
     channel_name = _slugify(raw_name)
+    logger.debug("Computed channel name: %s (raw=%s)", channel_name, raw_name)
 
     async def _op():
         bot = getattr(app, "bot", None)
         if bot is None:
+            logger.error("Discord bot instance not available on Flask app")
             raise RuntimeError("Discord bot instance not available on Flask app")
 
         # Find guild where the student is present
         target_guild = None
         student_member = None
+        logger.debug("Searching bot.guilds (%d) for member %s", len(bot.guilds), student_uid)
         for g in bot.guilds:
+            logger.debug("Checking guild id=%s name=%s for member %s", g.id, getattr(g, "name", "<no-name>"), student_uid)
             # Try cached member first
             m = g.get_member(student_uid)
             if m is None:
@@ -88,9 +104,11 @@ def create_training_channel():
             if m:
                 target_guild = g
                 student_member = m
+                logger.info("Found student %s in guild %s", student_uid, target_guild.id)
                 break
 
         if target_guild is None:
+            logger.error("Student with discord id %s not found in any guild the bot is in", student_uid)
             raise RuntimeError(f"Student with discord id {student_uid} not found in any guild the bot is in")
 
         # Resolve primary trainer and other trainers to Member objects if possible
@@ -106,12 +124,19 @@ def create_training_channel():
             return m
 
         primary_member = await _resolve_member(target_guild, primary_uid)
+        if primary_member:
+            logger.info("Resolved primary trainer to member id=%s display=%s", primary_member.id, getattr(primary_member, "display_name", None))
+        else:
+            logger.debug("Primary trainer not resolvable to guild member; will mention by id if provided")
+
         other_members = []
         for uid in other_uids:
             m = await _resolve_member(target_guild, uid)
             if m:
+                logger.debug("Resolved other trainer uid %s to member id=%s", uid, m.id)
                 other_members.append(m)
-
+            else:
+                logger.debug("Could not resolve other trainer uid %s to a guild member", uid)
 
         # Determine category id from guild config (custom key 'categories.training_channels_category_id')
         guild_cfg = cfg.get_guild_config(target_guild.id)
@@ -119,6 +144,7 @@ def create_training_channel():
         cat_id = categories.get("training_channels_category_id")
         category_obj = None
         if cat_id:
+            logger.info("Guild %s configured training category id=%s", target_guild.id, cat_id)
             try:
                 # Prefer resolving the category from the target guild to avoid cross-guild mismatches
                 category_obj = target_guild.get_channel(int(cat_id))
@@ -126,16 +152,24 @@ def create_training_channel():
                     # Fallback to fetching the channel globally and ensure it belongs to this guild
                     category_obj = await bot.fetch_channel(int(cat_id))
                     if getattr(category_obj, 'guild', None) != target_guild:
+                        logger.warning("Configured category id %s does not belong to guild %s", cat_id, target_guild.id)
                         category_obj = None
                 # Ensure the resolved object is actually a CategoryChannel
                 if category_obj is not None and not isinstance(category_obj, discord.CategoryChannel):
+                    logger.warning("Configured category id %s resolved to non-category channel type", cat_id)
                     category_obj = None
+                if category_obj is not None:
+                    logger.debug("Resolved category object id=%s name=%s", category_obj.id, getattr(category_obj, "name", None))
             except Exception:
+                logger.exception("Failed to resolve configured category id %s", cat_id)
                 category_obj = None
+        else:
+            logger.info("No training category configured for guild %s; creating channel at guild root", target_guild.id)
 
         # Ensure channel doesn't already exist
         existing = discord.utils.get(target_guild.channels, name=channel_name)
         if existing is not None:
+            logger.info("Channel already exists: name=%s id=%s guild=%s", channel_name, existing.id, target_guild.id)
             return {"status": "exists", "channel_id": existing.id, "guild_id": target_guild.id}
 
         # Build permission overwrites
@@ -154,83 +188,11 @@ def create_training_channel():
 
         # Create channel under the category if available
         # Provide a reason so this action is visible in audit logs and can be filtered by the logger
+        logger.info("Creating channel %s in guild %s under category %s", channel_name, target_guild.id, getattr(category_obj, "id", None))
         channel = await target_guild.create_text_channel(channel_name, overwrites=overwrites, category=category_obj, reason="create_training_channel (API)")
+        logger.info("Created channel %s (id=%s) in guild %s", channel.name, channel.id, target_guild.id)
 
-        # Build and send a welcome embed that pings the student and trainers and includes their info
         try:
-            # Mentions: prefer Member.mention when available, fallback to raw mention by id
-            #            mentions = []
-            #            student_mention = student_member.mention if student_member else f"<@{student_uid}>"
-            #            mentions.append(student_mention)
-            #            primary_mention = None
-            #            if primary_member:
-            #                primary_mention = primary_member.mention
-            #            elif primary_uid is not None:
-            #                primary_mention = f"<@{primary_uid}>"
-            #            if primary_mention:
-            #                mentions.append(primary_mention)
-            #
-            #            other_mentions = []
-            #            for o_uid, o in zip(other_uids, others):
-            #                # try to find resolved member in other_members matching uid
-            #                m_obj = None
-            #                for m in other_members:
-            #                    if getattr(m, 'id', None) == int(o_uid):
-            #                        m_obj = m
-            #                        break
-            #                other_mentions.append(m_obj.mention if m_obj else f"<@{o_uid}>")
-            #            mentions.extend(other_mentions)
-            #
-            #            mentions_text = " ".join(mentions)
-            #
-            #            # Build embed with person info
-            #            embed = discord.Embed(title=f"Training channel created: {channel_name}", color=discord.Color.green())
-            #            embed.description = f"Welcome! This channel is for the student's training. {mentions_text}"
-            #
-            #            # Helper to format a person dict
-            #            def fmt_person(prefix: str, person: dict):
-            #                parts = []
-            #                if person is None:
-            #                    return "(no data)"
-            #                name = person.get("fullName") or f"{person.get('firstName','')} {person.get('lastName','')}".strip()
-            #                parts.append(f"Name: {name}")
-            #                if person.get("operatingInitials"):
-            #                    parts.append(f"Initials: {person.get('operatingInitials')}")
-            #                if person.get("cid"):
-            #                    parts.append(f"CID: {person.get('cid')}")
-            #                if person.get("email"):
-            #                    parts.append(f"Email: {person.get('email')}")
-            #                if person.get("rating") is not None:
-            #                    parts.append(f"Rating: {person.get('rating')}")
-            #                if person.get("division"):
-            #                    parts.append(f"Division: {person.get('division')}")
-            #                if person.get("staffPositions"):
-            #                    sp = person.get("staffPositions")
-            #                    if isinstance(sp, (list, tuple)) and sp:
-            #                        parts.append(f"Staff positions: {', '.join(map(str, sp))}")
-            #                # Discord id
-            #                if person.get("discordUid"):
-            #                    parts.append(f"Discord ID: {person.get('discordUid')}")
-            #                return "\n".join(parts)
-            #
-            #            # Student field
-            #            embed.add_field(name="Student", value=fmt_person("Student", student), inline=False)
-            #            # Primary trainer
-            #            embed.add_field(name="Primary Trainer", value=fmt_person("Primary", primary), inline=False)
-            #
-            #            # Other trainers
-            #            if others:
-            #                other_values = []
-            #                for o in others:
-            #                    other_values.append(fmt_person("Trainer", o))
-            #                embed.add_field(name="Other Trainers", value="\n\n".join(other_values), inline=False)
-            #
-            #            # Timestamp
-            #            embed.timestamp = __import__('datetime').datetime.now(__import__('datetime').timezone.utc)
-            #
-            #            # Send the message; if this fails don't abort channel creation
-            #            await channel.send(content=mentions_text, embed=embed)
-            # Build trainer mention list (primary + other trainers) and prefer resolved Member.mention
             trainer_mentions = []
             if primary_member:
                 trainer_mentions.append(primary_member.mention)
@@ -266,8 +228,12 @@ def create_training_channel():
                 content_parts.append(str(student_mention))
             content_parts.extend(trainer_mentions)
             content = " ".join(content_parts).strip()
+
+            logger.info("Sending welcome message to channel id=%s (mentions=%s)", channel.id, trainer_mentions)
             await channel.send(content=content, embed=embed)
+            logger.info("Welcome message sent to channel id=%s", channel.id)
         except Exception:
+            logger.exception("Failed to send welcome message to channel id=%s", getattr(channel, "id", "<unknown>"))
             # Best-effort only; don't fail the API if the welcome message can't be sent
             pass
 
@@ -276,9 +242,11 @@ def create_training_channel():
     try:
         run_op = getattr(app, "run_discord_op", None)
         if run_op is None:
+            logger.error("API helper 'run_discord_op' not available on app; is the bot running?")
             raise RuntimeError("API helper 'run_discord_op' not available on app; is the bot running?")
         result = run_op(_op())
+        logger.info("create_training_channel operation completed with result: %s", result)
         return jsonify(result), 200
     except Exception as e:
+        logger.exception("Failed to create training channel: %s", e)
         return jsonify({"error": "Failed to create training channel", "detail": str(e)}), 500
-

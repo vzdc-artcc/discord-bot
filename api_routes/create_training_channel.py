@@ -45,6 +45,16 @@ def create_training_channel():
     primary = data.get("primaryTrainer")
     others = data.get("otherTrainers") or []
 
+    # Optional: client may include the target guild id directly in the request body
+    guild_id_raw = data.get("guild_id")
+    guild_id = None
+    if guild_id_raw is not None:
+        try:
+            guild_id = int(guild_id_raw)
+        except Exception:
+            logger.warning("guild_id provided but is not an integer: %r", guild_id_raw)
+            return jsonify({"error": "guild_id must be an integer"}), 400
+
     # Basic validation
     if not student or not primary:
         logger.warning("Missing required student or primaryTrainer object")
@@ -88,24 +98,48 @@ def create_training_channel():
             logger.error("Discord bot instance not available on Flask app")
             raise RuntimeError("Discord bot instance not available on Flask app")
 
-        # Find guild where the student is present
+        # Find guild where the student is present. If a guild_id was provided in the
+        # request body, prefer resolving that guild directly and ensure the student
+        # is present in it. Otherwise, search all guilds the bot is in for the student.
         target_guild = None
         student_member = None
-        logger.debug("Searching bot.guilds (%d) for member %s", len(bot.guilds), student_uid)
-        for g in bot.guilds:
-            logger.debug("Checking guild id=%s name=%s for member %s", g.id, getattr(g, "name", "<no-name>"), student_uid)
-            # Try cached member first
-            m = g.get_member(student_uid)
+        if guild_id is not None:
+            logger.debug("guild_id provided in request; resolving guild %s", guild_id)
+            # Prefer bot.get_guild if present (discord.Client/commands.Bot)
+            target_guild = bot.get_guild(guild_id) if hasattr(bot, "get_guild") else next((gg for gg in bot.guilds if gg.id == guild_id), None)
+            if target_guild is None:
+                logger.error("Guild id %s provided but bot is not a member of that guild", guild_id)
+                raise RuntimeError(f"Guild id {guild_id} not found in bot.guilds")
+
+            # Try to find the student in the provided guild
+            m = target_guild.get_member(student_uid)
             if m is None:
                 try:
-                    m = await g.fetch_member(student_uid)
+                    m = await target_guild.fetch_member(student_uid)
                 except Exception:
                     m = None
             if m:
-                target_guild = g
                 student_member = m
-                logger.info("Found student %s in guild %s", student_uid, target_guild.id)
-                break
+                logger.info("Found student %s in provided guild %s", student_uid, target_guild.id)
+            else:
+                logger.error("Student with discord id %s not found in provided guild %s", student_uid, target_guild.id)
+                raise RuntimeError(f"Student with discord id {student_uid} not found in guild {target_guild.id}")
+        else:
+            logger.debug("Searching bot.guilds (%d) for member %s", len(bot.guilds), student_uid)
+            for g in bot.guilds:
+                logger.debug("Checking guild id=%s name=%s for member %s", g.id, getattr(g, "name", "<no-name>"), student_uid)
+                # Try cached member first
+                m = g.get_member(student_uid)
+                if m is None:
+                    try:
+                        m = await g.fetch_member(student_uid)
+                    except Exception:
+                        m = None
+                if m:
+                    target_guild = g
+                    student_member = m
+                    logger.info("Found student %s in guild %s", student_uid, target_guild.id)
+                    break
 
         if target_guild is None:
             logger.error("Student with discord id %s not found in any guild the bot is in", student_uid)

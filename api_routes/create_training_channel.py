@@ -35,13 +35,11 @@ def create_training_channel():
 
     data = request.get_json(silent=True)
     logger.debug("create_training_channel called")
-    logger.debug("Request JSON payload: %s", data)
+    logger.info("Request JSON payload: %s", data)
 
     if not data:
         logger.warning("Invalid or missing JSON body")
         return jsonify({"error": "Invalid or missing JSON body"}), 400
-
-    logger.debug("Request JSON payload: %s", data)
 
     student = data.get("student")
     primary = data.get("primaryTrainer")

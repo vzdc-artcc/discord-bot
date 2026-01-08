@@ -398,6 +398,21 @@ class DiscordLogger(commands.Cog):
         if ch is None:
             return
         actor, reason = await self._fetch_audit_actor(guild, discord.AuditLogAction.channel_create, target_id=channel.id)
+
+        # If the bot created the channel (actor == guild.me) or the reason matches our API reason,
+        # skip logging to avoid flooding the logging channel and hitting rate limits.
+        try:
+            if actor is not None and getattr(actor, 'id', None) == getattr(guild.me, 'id', None):
+                return
+        except Exception:
+            # If we can't determine actor or guild.me, continue with normal logging
+            pass
+        try:
+            if reason and isinstance(reason, str) and 'create_training_channel (API)' in reason:
+                return
+        except Exception:
+            pass
+
         title = "📁 Channel Created"
         desc = f"Channel: {channel.name} (ID {channel.id}) Type: {type(channel).__name__}"
         if actor:

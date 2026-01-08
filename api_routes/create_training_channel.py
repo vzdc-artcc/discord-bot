@@ -35,6 +35,7 @@ def create_training_channel():
 
     data = request.get_json(silent=True)
     logger.debug("create_training_channel called")
+    logger.info("Request JSON payload: %s", data)
 
     if not data:
         logger.warning("Invalid or missing JSON body")
@@ -49,30 +50,25 @@ def create_training_channel():
         logger.warning("Missing required student or primaryTrainer object")
         return jsonify({"error": "Missing required student or primaryTrainer object"}), 400
 
-    # Treat discord UIDs as strings. Accept and normalize values like numbers or the literal strings
-    # "null"/"None" from upstream systems.
-    student_uid = student.get("discordUid")
-    student_uid = None if student_uid is None else str(student_uid).strip()
-    if not student_uid or student_uid.lower() in ("null", "none"):
-        logger.warning("student.discordUid is required and must be provided: %r", student.get("discordUid"))
-        return jsonify({"error": "student.discordUid is required and must be provided"}), 400
+    try:
+        student_uid = int(student.get("discordUid"))
+    except Exception:
+        logger.warning("student.discordUid is required and must be an integer: %r", student.get("discordUid"))
+        return jsonify({"error": "student.discordUid is required and must be an integer"}), 400
 
-    primary_uid = primary.get("discordUid")
-    primary_uid = None if primary_uid is None else str(primary_uid).strip()
-    if primary_uid and primary_uid.lower() in ("null", "none"):
+    try:
+        primary_uid = int(primary.get("discordUid"))
+    except Exception:
+        logger.debug("primaryTrainer.discordUid missing or invalid; continuing without resolved primary member")
         primary_uid = None
 
     other_uids = []
     for o in others:
-        uid_val = o.get("discordUid")
-        if uid_val is None:
-            logger.debug("Skipping otherTrainer with missing discordUid: %r", o)
-            continue
-        uid_str = str(uid_val).strip()
-        if not uid_str or uid_str.lower() in ("null", "none"):
+        try:
+            other_uids.append(int(o.get("discordUid")))
+        except Exception:
             logger.debug("Skipping otherTrainer with invalid discordUid: %r", o)
             continue
-        other_uids.append(uid_str)
 
     first = student.get("firstName") or ""
     last = student.get("lastName") or ""
@@ -98,19 +94,13 @@ def create_training_channel():
         logger.debug("Searching bot.guilds (%d) for member %s", len(bot.guilds), student_uid)
         for g in bot.guilds:
             logger.debug("Checking guild id=%s name=%s for member %s", g.id, getattr(g, "name", "<no-name>"), student_uid)
-            # Try to resolve member by numeric ID when possible (discord API expects ints).
-            m = None
-            try:
-                sid_int = int(student_uid)
-            except Exception:
-                sid_int = None
-            if sid_int is not None:
-                m = g.get_member(sid_int)
-                if m is None:
-                    try:
-                        m = await g.fetch_member(sid_int)
-                    except Exception:
-                        m = None
+            # Try cached member first
+            m = g.get_member(student_uid)
+            if m is None:
+                try:
+                    m = await g.fetch_member(student_uid)
+                except Exception:
+                    m = None
             if m:
                 target_guild = g
                 student_member = m
@@ -125,15 +115,10 @@ def create_training_channel():
         async def _resolve_member(guild, uid):
             if uid is None:
                 return None
-            # Try to interpret uid as an int for member lookup; otherwise we can't resolve.
-            try:
-                uid_int = int(uid)
-            except Exception:
-                return None
-            m = guild.get_member(uid_int)
+            m = guild.get_member(uid)
             if m is None:
                 try:
-                    m = await guild.fetch_member(uid_int)
+                    m = await guild.fetch_member(uid)
                 except Exception:
                     m = None
             return m
@@ -218,7 +203,7 @@ def create_training_channel():
                 # try to find resolved member in other_members matching uid
                 m_obj = None
                 for m in other_members:
-                    if str(getattr(m, 'id', None)) == str(uid):
+                    if getattr(m, 'id', None) == int(uid):
                         m_obj = m
                         break
                 trainer_mentions.append(m_obj.mention if m_obj else f"<@{uid}>")

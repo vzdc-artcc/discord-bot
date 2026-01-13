@@ -7,6 +7,8 @@ from extensions.api_server import app, api_key_required
 import config as cfg
 from utils.events import parse_position
 from utils.vatsim import parse_vatsim_logon_time
+from utils.event_log import load_log, save_log, make_event_key
+import time
 
 bp = Blueprint("event_position_posting", __name__, url_prefix="/event_position_posting")
 
@@ -254,6 +256,68 @@ def post_event_position_posting():
         if run_op is None:
             raise RuntimeError("API server helper 'run_discord_op' not available on app; is the bot running?")
         message_id = run_op(_send())
+
+        # After successful post, persist the posting and delete any previous posting for same event
+        try:
+            key = make_event_key(event_id, event_name, guild_id)
+            guild_key = guild_id if guild_id is not None else None
+            log = load_log(guild_key) or {}
+
+            existing = log.get(key)
+            if existing:
+                prev_chan = existing.get("channel_id")
+                prev_msg = existing.get("message_id")
+                if prev_chan and prev_msg:
+                    # Try to delete previous message asynchronously via run_op
+                    async def _delete_prev():
+                        try:
+                            bot = getattr(app, "bot", None)
+                            if bot is None:
+                                return False
+                            try:
+                                channel = bot.get_channel(int(prev_chan)) if prev_chan is not None else None
+                                if channel is None:
+                                    channel = await bot.fetch_channel(int(prev_chan))
+                                # fetch message and delete
+                                try:
+                                    msg = await channel.fetch_message(int(prev_msg))
+                                except Exception:
+                                    # message may be already deleted or fetch failed
+                                    msg = None
+                                if msg:
+                                    await msg.delete()
+                                return True
+                            except Exception:
+                                return False
+                        except Exception:
+                            return False
+
+                    try:
+                        # fire deletion; ignore result but attempt it
+                        run_op(_delete_prev())
+                    except Exception:
+                        # ignore deletion failure; proceed to update log
+                        pass
+
+            # record new entry
+            entry = {
+                "event_title": event_name,
+                "event_id": event_id,
+                "guild_id": guild_id,
+                "channel_id": target_channel_id,
+                "message_id": message_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            log[key] = entry
+            try:
+                save_log(guild_key, log)
+            except Exception:
+                # If saving the log fails, we still succeeded in posting; surface error to caller
+                return jsonify({"status": "ok", "channel_id": target_channel_id, "message_id": message_id, "warning": "failed to persist posting log"}), 200
+        except Exception:
+            # Any error while handling logs should not break the main success path
+            return jsonify({"status": "ok", "channel_id": target_channel_id, "message_id": message_id}), 200
+
         return jsonify({"status": "ok", "channel_id": target_channel_id, "message_id": message_id}), 200
     except Exception as e:
         return jsonify({"error": "Failed to post event positions", "detail": str(e)}), 500

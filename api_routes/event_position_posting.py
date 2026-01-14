@@ -256,12 +256,22 @@ def post_event_position_posting():
         logger.debug("Dry-run payload", extra={"payload": payload})
         return jsonify({"status": "dry_run", "payload": payload}), 200
 
+    # If we don't have a target channel by this point, fail early with a helpful message
+    if target_channel_id is None:
+        logger.error("No target channel resolved for event posting; aborting", extra={"event_id": event_id, "guild_id": guild_id})
+        return jsonify({"error": "No target channel configured or provided for event posting"}), 400
+
     # Send to Discord via app.run_discord_op
     async def _send():
         bot = getattr(app, "bot", None)
         if bot is None:
             logger.error("Discord bot instance not available on Flask app during _send")
             raise RuntimeError("Discord bot instance not available on Flask app")
+
+        # target_channel_id must be present here; guard against accidental None to avoid TypeError from int(None)
+        if target_channel_id is None:
+            logger.error("Attempted to send without a target_channel_id", extra={"event_id": event_id})
+            raise RuntimeError("No target channel specified for posting")
 
         channel = bot.get_channel(int(target_channel_id)) if target_channel_id is not None else None
         if channel is None:
@@ -358,5 +368,4 @@ def post_event_position_posting():
     except Exception as e:
         logger.exception("Failed to post event positions", exc_info=True, extra={"event_id": event_id, "target_channel_id": target_channel_id})
         return jsonify({"error": "Failed to post event positions", "detail": str(e)}), 500
-
 

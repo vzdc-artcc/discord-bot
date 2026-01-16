@@ -34,6 +34,81 @@ RATING_ID_TO_SHORT = {
 }
 
 
+# Helper: try multiple possible controller time field names and parse to datetime (UTC-aware)
+def _parse_controller_time_field(ctrl: Dict[str, Any]):
+    """Return a tuple (start_dt, end_dt) or (None, None).
+
+    Looks for common keys used to describe controller-specific signup times.
+    """
+    if not isinstance(ctrl, dict):
+        return None, None
+
+    candidates_start = ["signup_start", "signupStart", "controller_start_time", "controller_final_start_time", "final_start_time", "start_time", "start"]
+    candidates_end = ["signup_end", "signupEnd", "controller_end_time", "controller_final_end_time", "final_end_time", "end_time", "end"]
+
+    start_val = None
+    end_val = None
+    for k in candidates_start:
+        if k in ctrl and ctrl[k]:
+            start_val = ctrl[k]
+            break
+    for k in candidates_end:
+        if k in ctrl and ctrl[k]:
+            end_val = ctrl[k]
+            break
+
+    def _parse(val):
+        if val is None:
+            return None
+        try:
+            if isinstance(val, datetime):
+                dt = val
+            elif isinstance(val, str):
+                dt = parse_vatsim_logon_time(val) if val else None
+            else:
+                # unsupported type
+                return None
+            if isinstance(dt, datetime) and dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:
+            logger.debug("Failed to parse controller time value", exc_info=True, extra={"value": val})
+            return None
+
+    return _parse(start_val), _parse(end_val)
+
+
+def _format_controller_time_span(cs: datetime | None, ce: datetime | None):
+    """Return a short formatted string for controller-specific times to append to the line.
+
+    Uses Discord timestamp tags when possible. Examples:
+      " — <t:1670000000:t> to <t:1670007200:t>"
+      " — <t:1670000000:t>"
+    Returns empty string if neither cs nor ce provided.
+    """
+    if cs is None and ce is None:
+        return ""
+    try:
+        if cs and ce:
+            return f" — <t:{int(cs.timestamp())}:t> to <t:{int(ce.timestamp())}:t>"
+        if cs:
+            return f" — <t:{int(cs.timestamp())}:t>"
+        if ce:
+            return f" — <t:{int(ce.timestamp())}:t>"
+    except Exception:
+        # fallback to ISO strings
+        try:
+            if cs and ce:
+                return f" — {cs.isoformat()} to {ce.isoformat()}"
+            if cs:
+                return f" — {cs.isoformat()}"
+            if ce:
+                return f" — {ce.isoformat()}"
+        except Exception:
+            return ""
+    return ""
+
+
 @bp.route("", methods=["POST"])  # POST /event_position_posting
 @api_key_required
 def post_event_position_posting():
@@ -85,6 +160,8 @@ def post_event_position_posting():
 
     # format times for Discord timestamps if possible
     times_str = ""
+    sdt = None
+    edt = None
     try:
         sdt = parse_vatsim_logon_time(start_time) if isinstance(start_time, str) and start_time else (start_time if isinstance(start_time, datetime) else None)
         edt = parse_vatsim_logon_time(end_time) if isinstance(end_time, str) and end_time else (end_time if isinstance(end_time, datetime) else None)
@@ -189,10 +266,26 @@ def post_event_position_posting():
                 rating_str = str(rating)
 
         # readable line for this controller
+        # Check for controller-specific signup/start/end times and append them if they differ from the event times
+        try:
+            cs, ce = _parse_controller_time_field(c)
+            # Determine if times should be shown: only show if either start or end exists and differs from event times
+            show_times = False
+            if cs is not None:
+                if sdt is None or int(cs.timestamp()) != int(sdt.timestamp()):
+                    show_times = True
+            if ce is not None and not show_times:
+                if edt is None or int(ce.timestamp()) != int(edt.timestamp()):
+                    show_times = True
+            time_suffix = _format_controller_time_span(cs, ce) if show_times else ""
+        except Exception:
+            logger.debug("Failed to parse/format controller-specific times", exc_info=True, extra={"controller": c})
+            time_suffix = ""
+
         if rating_str:
-            line = f"{name} ({rating_str}) — {final_pos}"
+            line = f"{name} ({rating_str}) — {final_pos}{time_suffix}"
         else:
-            line = f"{name} — {final_pos}"
+            line = f"{name} — {final_pos}{time_suffix}"
 
         category_groups.setdefault(category, []).append(line)
 

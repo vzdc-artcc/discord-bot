@@ -1,3 +1,31 @@
+"""Event position posting endpoint
+
+This module implements a Flask blueprint that accepts a JSON payload describing
+an event and a set of controllers, builds a Discord Embed summarizing controller
+positions and times, and either returns a dry-run payload or posts the embed to
+Discord via the running bot.
+
+Contract
+- Endpoint: POST /event_position_posting
+- Inputs (JSON): event_name, event_id, event_description, event_banner_url,
+  event_start_time, event_end_time, controllers (list), optional channel_id,
+  optional dry_run, optional guild_id
+- Outputs: On dry_run returns JSON with prepared embed payload. On success
+  posts embed to Discord and returns status ok with channel_id/message_id.
+- Error modes: returns 4xx for bad input or missing configuration, 5xx for
+  unexpected failures while posting.
+
+Behavior highlights
+- Title is the event_name and links to https://vzdc.org/events/{event_id} when
+  event_id is provided.
+- Event Start/End are shown as separate inline embed fields (Discord timestamp
+  tags when parsable). Controller-specific signup times will be appended to
+  controller lines when they differ from the event times.
+
+The implementation is defensive and logs parsing failures rather than raising
+exceptions for non-fatal problems.
+"""
+
 from flask import Blueprint, request, jsonify
 import discord
 from datetime import datetime, timezone
@@ -14,7 +42,13 @@ bp = Blueprint("event_position_posting", __name__, url_prefix="/event_position_p
 
 
 def _safe_get(d: Dict[str, Any], key: str, default=None):
+    """Safely retrieve a key from a mapping or return a default.
+
+    This helper returns default for non-dict inputs to simplify callers that
+    accept either dicts or other types.
+    """
     return d.get(key, default) if isinstance(d, dict) else default
+
 
 RATING_ID_TO_SHORT = {
     -1: "INA",
@@ -34,17 +68,35 @@ RATING_ID_TO_SHORT = {
 }
 
 
-# Helper: try multiple possible controller time field names and parse to datetime (UTC-aware)
 def _parse_controller_time_field(ctrl: Dict[str, Any]):
-    """Return a tuple (start_dt, end_dt) or (None, None).
+    """Attempt to extract controller-specific start/end datetimes.
 
-    Looks for common keys used to describe controller-specific signup times.
+    The function accepts a controller mapping and looks for a variety of
+    commonly used keys (signup_start, controller_final_start_time, start_time,
+    etc). Returns a tuple (start_dt, end_dt) where each element is either a
+    timezone-aware datetime (UTC) or None.
     """
     if not isinstance(ctrl, dict):
         return None, None
 
-    candidates_start = ["signup_start", "signupStart", "controller_start_time", "controller_final_start_time", "final_start_time", "start_time", "start"]
-    candidates_end = ["signup_end", "signupEnd", "controller_end_time", "controller_final_end_time", "final_end_time", "end_time", "end"]
+    candidates_start = [
+        "signup_start",
+        "signupStart",
+        "controller_start_time",
+        "controller_final_start_time",
+        "final_start_time",
+        "start_time",
+        "start",
+    ]
+    candidates_end = [
+        "signup_end",
+        "signupEnd",
+        "controller_end_time",
+        "controller_final_end_time",
+        "final_end_time",
+        "end_time",
+        "end",
+    ]
 
     start_val = None
     end_val = None
@@ -66,7 +118,6 @@ def _parse_controller_time_field(ctrl: Dict[str, Any]):
             elif isinstance(val, str):
                 dt = parse_vatsim_logon_time(val) if val else None
             else:
-                # unsupported type
                 return None
             if isinstance(dt, datetime) and dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
@@ -79,12 +130,11 @@ def _parse_controller_time_field(ctrl: Dict[str, Any]):
 
 
 def _format_controller_time_span(cs: datetime | None, ce: datetime | None):
-    """Return a short formatted string for controller-specific times to append to the line.
+    """Format a short human-friendly time span for controller-specific times.
 
-    Uses Discord timestamp tags when possible. Examples:
-      " — <t:1670000000:t> to <t:1670007200:t>"
-      " — <t:1670000000:t>"
-    Returns empty string if neither cs nor ce provided.
+    When datetimes are available, Discord timestamp tags are used. If an
+    exception occurs, ISO-formatted strings are used as a fallback. If neither
+    cs nor ce are provided an empty string is returned.
     """
     if cs is None and ce is None:
         return ""
@@ -96,7 +146,6 @@ def _format_controller_time_span(cs: datetime | None, ce: datetime | None):
         if ce:
             return f" — <t:{int(ce.timestamp())}:t>"
     except Exception:
-        # fallback to ISO strings
         try:
             if cs and ce:
                 return f" — {cs.isoformat()} to {ce.isoformat()}"
@@ -109,33 +158,29 @@ def _format_controller_time_span(cs: datetime | None, ce: datetime | None):
     return ""
 
 
-@bp.route("", methods=["POST"])  # POST /event_position_posting
+@bp.route("", methods=["POST"])
 @api_key_required
 def post_event_position_posting():
-    """Accepts a payload describing an event and a list of controllers with final positions and posts
+    """POST endpoint: prepare and post an event positions embed to Discord.
 
-    Expected JSON shape:
-    {
-        "event_name": "...",
-        "event_id": "...",
-        "event_description": "...",
-        "event_banner_url": "https://...",
-        "event_start_time": "2025-11-17T00:00:00Z",
-        "event_end_time": "2025-11-17T02:00:00Z",
-        "controllers": [
-            {"controller_name": "Alice", "controller_rating": "C1", "controller_final_position": "GND"},
-            ...
-        ],
-        "channel_id": 1234567890,   # optional override
-        "dry_run": true            # optional
-    }
+    Input JSON (required fields):
+      - event_name, event_id, event_description,
+        event_start_time, event_end_time, controllers (list)
+
+    Optional input fields:
+      - event_banner_url, channel_id (override), dry_run, guild_id
+
+    Return values:
+      - 200 + {status: 'dry_run', payload: {...}} when dry_run is true
+      - 200 + {status: 'ok', channel_id, message_id} on successful post
+      - 4xx for invalid input or missing configuration
+      - 500 for unexpected failures while posting
     """
     data = request.get_json(silent=True)
     if not data:
         logger.warning("Invalid or missing JSON payload in /event_position_posting POST")
         return jsonify({"error": "Invalid or missing JSON payload"}), 400
 
-    # required top-level fields
     required = ["event_name", "event_id", "event_description", "event_start_time", "event_end_time", "controllers"]
     for r in required:
         if r not in data:
@@ -158,7 +203,6 @@ def post_event_position_posting():
         logger.warning("Invalid controllers type in request; expected list", extra={"controllers_type": type(controllers).__name__})
         return jsonify({"error": "`controllers` must be a list"}), 400
 
-    # format times for Discord timestamps if possible
     times_str = ""
     sdt = None
     edt = None
@@ -185,12 +229,10 @@ def post_event_position_posting():
         logger.debug("Failed to parse event start/end times", exc_info=True)
         times_str = ""
 
-    # Resolve announcement type properties
     post_conf = cfg.ANNOUNCEMENT_TYPES.get("event-position-posting", {})
     color_val = post_conf.get("color")
     title_prefix = post_conf.get("title_prefix", "Event Posting:")
 
-    # Resolve target channel via explicit override or guild config (if provided)
     guild_id = _safe_get(data, "guild_id")
     target_channel_id = None
     if channel_override:
@@ -200,10 +242,7 @@ def post_event_position_posting():
         target_channel_id = cfg.resolve_announcement_target_channel(guild_id, "event-position-posting")
         logger.debug("Resolved target channel from guild config", extra={"guild_id": guild_id, "target_channel_id": target_channel_id})
 
-    # Build embed
-    # Use only the event name as the title (remove the generic prefix)
     embed_title = f"{event_name}".strip()
-    # Make the event title a hyperlink to the event page when we have an event_id
     event_url = None
     try:
         if event_id is not None:
@@ -215,13 +254,10 @@ def post_event_position_posting():
     if banner_url:
         try:
             embed.set_image(url=banner_url)
-        except Exception as e:
-            # ignore bad banner url
+        except Exception:
             logger.debug("Failed to set embed image", exc_info=True, extra={"banner_url": banner_url})
 
-    # Add Start/End as their own fields so they appear above the positions
     try:
-        # sdt/edt were parsed earlier; show human-friendly Discord full timestamps when available
         start_val = f"<t:{int(sdt.timestamp())}:F>" if isinstance(sdt, datetime) else (start_time if start_time else "N/A")
         end_val = f"<t:{int(edt.timestamp())}:F>" if isinstance(edt, datetime) else (end_time if end_time else "N/A")
         embed.add_field(name="Start", value=start_val, inline=True)
@@ -230,11 +266,9 @@ def post_event_position_posting():
     except Exception:
         logger.debug("Failed to add start/end time fields to embed (above positions)", exc_info=True)
 
-    # Controllers: group controllers by position category (GND/TWR/APP/CTR/etc.) and add one field per category
     max_fields = 25
     added = 0
 
-    # Aggregate controllers into categories using parse_position
     category_groups: dict = {}
     for c in controllers:
         if not isinstance(c, dict):
@@ -242,11 +276,9 @@ def post_event_position_posting():
             continue
         final_pos = _safe_get(c, "controller_final_position")
         if not final_pos:
-            # skip controllers without a final position
             logger.debug("Skipping controller with no final position", extra={"controller": c})
             continue
 
-        # determine category (e.g., GND, TWR, APP, CTR, etc.)
         try:
             category = parse_position(str(final_pos)) or "UNKNOWN"
         except Exception:
@@ -255,17 +287,13 @@ def post_event_position_posting():
 
         name = _safe_get(c, "controller_name") or "(Unnamed)"
         rating = _safe_get(c, "controller_rating")
-        # format rating consistently as string if present
         rating_str = ""
         if rating is not None:
-            # If rating is an integer (or numeric string), map using RATING_ID_TO_SHORT
             try:
-                # handle ints directly
                 if isinstance(rating, int):
                     rating_str = RATING_ID_TO_SHORT.get(rating, str(rating))
                 else:
                     rs = str(rating).strip()
-                    # numeric string (e.g. "5")
                     if rs.lstrip("+-").isdigit():
                         try:
                             rid = int(rs)
@@ -273,22 +301,17 @@ def post_event_position_posting():
                         except Exception:
                             rating_str = rs.upper()
                     else:
-                        # If the provided value is already a known short code, normalize it.
                         up = rs.upper()
                         if up in set(RATING_ID_TO_SHORT.values()):
                             rating_str = up
                         else:
-                            # Fallback: use the string representation (uppercased for consistency)
                             rating_str = up
             except Exception:
                 logger.debug("Failed to normalize controller rating", exc_info=True, extra={"rating": rating})
                 rating_str = str(rating)
 
-        # readable line for this controller
-        # Check for controller-specific signup/start/end times and append them if they differ from the event times
         try:
             cs, ce = _parse_controller_time_field(c)
-            # Determine if times should be shown: only show if either start or end exists and differs from event times
             show_times = False
             if cs is not None:
                 if sdt is None or int(cs.timestamp()) != int(sdt.timestamp()):
@@ -310,12 +333,10 @@ def post_event_position_posting():
 
     logger.debug("Grouped controllers into categories", extra={"category_counts": {k: len(v) for k, v in category_groups.items()}})
 
-    # Preferred display order for categories, fall back to remaining sorted keys
     preferred_order = ["RMP", "DEL", "GND", "TWR", "DEP", "APP", "CTR", "CIC", "TMU", "OTHER", "UNKNOWN"]
     remaining = [k for k in category_groups.keys() if k not in preferred_order]
     ordered_keys = [k for k in preferred_order if k in category_groups] + sorted(remaining)
 
-    # Add one embed field per category with all controllers in that category (truncate if too long)
     for cat in ordered_keys:
         if added >= max_fields:
             logger.info("Reached max embed fields limit; skipping remaining categories", extra={"added": added, "max_fields": max_fields})
@@ -325,10 +346,8 @@ def post_event_position_posting():
             continue
 
         field_name = f"{cat} ({len(members)})"
-        # join members with newlines; Discord field value max ~1024 characters
         value = "\n".join(members)
         if len(value) > 1000:
-            # try to truncate gracefully while keeping whole lines
             parts = []
             cur_len = 0
             for m in members:
@@ -343,14 +362,11 @@ def post_event_position_posting():
         embed.add_field(name=field_name, value=value, inline=False)
         added += 1
 
-    # If no category fields were added, add a summary field
     if added == 0:
         logger.info("No controllers provided or none valid; adding placeholder field to embed", extra={"event_id": event_id})
         embed.add_field(name="Controllers", value="No controllers provided or none valid.", inline=False)
 
-    # Dry-run: return the prepared payload
     if dry_run:
-        # include normalized event start/end in the dry-run payload for inspection
         event_start_val = sdt.isoformat() if isinstance(sdt, datetime) else (start_time if start_time else None)
         event_end_val = edt.isoformat() if isinstance(edt, datetime) else (end_time if end_time else None)
         payload = {
@@ -368,19 +384,16 @@ def post_event_position_posting():
         logger.debug("Dry-run payload", extra={"payload": payload})
         return jsonify({"status": "dry_run", "payload": payload}), 200
 
-    # If we don't have a target channel by this point, fail early with a helpful message
     if target_channel_id is None:
         logger.error("No target channel resolved for event posting; aborting", extra={"event_id": event_id, "guild_id": guild_id})
         return jsonify({"error": "No target channel configured or provided for event posting"}), 400
 
-    # Send to Discord via app.run_discord_op
     async def _send():
         bot = getattr(app, "bot", None)
         if bot is None:
             logger.error("Discord bot instance not available on Flask app during _send")
             raise RuntimeError("Discord bot instance not available on Flask app")
 
-        # target_channel_id must be present here; guard against accidental None to avoid TypeError from int(None)
         if target_channel_id is None:
             logger.error("Attempted to send without a target_channel_id", extra={"event_id": event_id})
             raise RuntimeError("No target channel specified for posting")
@@ -405,7 +418,6 @@ def post_event_position_posting():
         message_id = run_op(_send())
         logger.info("Posted event embed to Discord", extra={"event_id": event_id, "message_id": message_id, "target_channel_id": target_channel_id})
 
-        # After successful post, persist the posting and delete any previous posting for same event
         try:
             key = make_event_key(event_id, event_name, guild_id)
             guild_key = guild_id if guild_id is not None else None
@@ -417,7 +429,6 @@ def post_event_position_posting():
                 prev_msg = existing.get("message_id")
                 if prev_chan and prev_msg:
                     logger.info("Found existing posting for event; attempting to delete previous message", extra={"prev_channel": prev_chan, "prev_msg": prev_msg})
-                    # Try to delete previous message asynchronously via run_op
                     async def _delete_prev():
                         try:
                             bot = getattr(app, "bot", None)
@@ -428,11 +439,9 @@ def post_event_position_posting():
                                 channel = bot.get_channel(int(prev_chan)) if prev_chan is not None else None
                                 if channel is None:
                                     channel = await bot.fetch_channel(int(prev_chan))
-                                # fetch message and delete
                                 try:
                                     msg = await channel.fetch_message(int(prev_msg))
                                 except Exception:
-                                    # message may be already deleted or fetch failed
                                     logger.debug("Failed to fetch previous message; it may already be deleted", extra={"prev_channel": prev_chan, "prev_msg": prev_msg})
                                     msg = None
                                 if msg:
@@ -447,14 +456,11 @@ def post_event_position_posting():
                             return False
 
                     try:
-                        # fire deletion; ignore result but attempt it
                         run_op(_delete_prev())
                     except Exception:
                         logger.debug("run_op failed when attempting to delete previous message", exc_info=True)
-                        # ignore deletion failure; proceed to update log
                         pass
 
-            # record new entry
             entry = {
                 "event_title": event_name,
                 "event_id": event_id,
@@ -469,11 +475,9 @@ def post_event_position_posting():
                 logger.info("Persisted posting to event log", extra={"key": key, "guild_key": guild_key})
             except Exception:
                 logger.warning("Failed to persist posting log", exc_info=True, extra={"key": key, "guild_key": guild_key})
-                # If saving the log fails, we still succeeded in posting; surface error to caller
                 return jsonify({"status": "ok", "channel_id": target_channel_id, "message_id": message_id, "warning": "failed to persist posting log"}), 200
         except Exception:
             logger.debug("Error while handling posting log; continuing (non-fatal)", exc_info=True)
-            # Any error while handling logs should not break the main success path
             return jsonify({"status": "ok", "channel_id": target_channel_id, "message_id": message_id}), 200
 
         return jsonify({"status": "ok", "channel_id": target_channel_id, "message_id": message_id}), 200

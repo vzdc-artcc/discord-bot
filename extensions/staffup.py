@@ -269,7 +269,6 @@ class Staffup(commands.Cog):
                                     except Exception as e:
                                         logger.exception("Failed to send staffup online embed: %s", e)
 
-                                # ensure the stored entry reflects active status
                                 online_ctrl_data['isActive'] = True
                                 online_ref.append(online_ctrl_data)
                                 self.online_zdc_controllers = online_ref

@@ -270,6 +270,114 @@ def post_event_position_posting():
     added = 0
 
     category_groups: dict = {}
+
+    def _get_discord_id_from_controller(ctrl: Dict[str, Any]) -> int | None:
+        candidates = ["controller_discord_id"]
+        for k in candidates:
+            v = _safe_get(ctrl, k)
+            if v is None:
+                continue
+            try:
+                sv = str(v).strip()
+            except Exception:
+                continue
+            if not sv:
+                continue
+            if sv.lower() in ("null", "none", "n/a"):
+                continue
+            try:
+                return int(sv)
+            except Exception:
+                try:
+                    return int(sv.split("#")[0])
+                except Exception:
+                    continue
+        return None
+
+    def _resolve_discord_tag_for_id(uid: int, guild_id_val: Any) -> str | None:
+        run_op = getattr(app, "run_discord_op", None)
+        if run_op is None:
+            return None
+
+        async def _fetch():
+            bot = getattr(app, "bot", None)
+            if bot is None:
+                return None
+            try:
+                if guild_id_val is not None:
+                    try:
+                        g = bot.get_guild(int(guild_id_val))
+                    except Exception:
+                        g = None
+                    if g is not None:
+                        m = g.get_member(int(uid))
+                        if m is not None:
+                            return str(m)
+                        try:
+                            m = await g.fetch_member(int(uid))
+                            if m is not None:
+                                return str(m)
+                        except Exception:
+                            pass
+                try:
+                    user = await bot.fetch_user(int(uid))
+                    if user is not None:
+                        name = getattr(user, "name", None)
+                        disc = getattr(user, "discriminator", None)
+                        if name and disc:
+                            return f"{name}#{disc}"
+                        return str(user)
+                except Exception:
+                    return None
+            except Exception:
+                return None
+            return None
+
+        try:
+            return run_op(_fetch())
+        except Exception:
+            return None
+
+    def _validate_discord_id(uid: int, guild_id_val: Any) -> bool:
+        run_op = getattr(app, "run_discord_op", None)
+        if run_op is None:
+            return False
+
+        async def _fetch():
+            bot = getattr(app, "bot", None)
+            if bot is None:
+                return False
+            try:
+                if guild_id_val is not None:
+                    try:
+                        g = bot.get_guild(int(guild_id_val))
+                    except Exception:
+                        g = None
+                    if g is not None:
+                        m = g.get_member(int(uid))
+                        if m is not None:
+                            return True
+                        try:
+                            m = await g.fetch_member(int(uid))
+                            if m is not None:
+                                return True
+                        except Exception:
+                            pass
+                try:
+                    user = await bot.fetch_user(int(uid))
+                    if user is not None:
+                        return True
+                except Exception:
+                    return False
+            except Exception:
+                return False
+            return False
+
+        try:
+            return bool(run_op(_fetch()))
+        except Exception:
+            return False
+
     for c in controllers:
         if not isinstance(c, dict):
             logger.debug("Skipping controller entry that is not a dict", extra={"entry": c})
@@ -285,7 +393,22 @@ def post_event_position_posting():
             logger.debug("Failed to parse controller final position; defaulting to UNKNOWN", exc_info=True, extra={"final_pos": final_pos})
             category = "UNKNOWN"
 
-        name = _safe_get(c, "controller_name") or "(Unnamed)"
+        configured_name = _safe_get(c, "controller_name") or "(Unnamed)"
+        display_name = configured_name
+        uid = _get_discord_id_from_controller(c)
+        if uid is not None:
+            try:
+                run_op = getattr(app, "run_discord_op", None)
+                bot_obj = getattr(app, "bot", None)
+                bot_available = run_op is not None and bot_obj is not None
+                if bot_available:
+                    if _validate_discord_id(uid, guild_id):
+                        display_name = f"<@{uid}>"
+                else:
+                    display_name = f"<@{uid}>"
+            except Exception:
+                logger.debug("Failed to resolve/validate discord id for controller; using configured name", exc_info=True, extra={"controller": c})
+
         rating = _safe_get(c, "controller_rating")
         rating_str = ""
         if rating is not None:
@@ -325,9 +448,9 @@ def post_event_position_posting():
             time_suffix = ""
 
         if rating_str:
-            line = f"{name} ({rating_str}) — {final_pos}{time_suffix}"
+            line = f"{display_name} ({rating_str}) — {final_pos}{time_suffix}"
         else:
-            line = f"{name} — {final_pos}{time_suffix}"
+            line = f"{display_name} — {final_pos}{time_suffix}"
 
         category_groups.setdefault(category, []).append(line)
 
@@ -366,6 +489,26 @@ def post_event_position_posting():
         logger.info("No controllers provided or none valid; adding placeholder field to embed", extra={"event_id": event_id})
         embed.add_field(name="Controllers", value="No controllers provided or none valid.", inline=False)
 
+    # Compute mention UIDs and mention text for dry-run preview
+    mention_uids_preview = []
+    for c in controllers:
+        try:
+            uid_val = _get_discord_id_from_controller(c)
+            if uid_val is not None:
+                mention_uids_preview.append(int(uid_val))
+        except Exception:
+            continue
+    mention_text_preview = " ".join(f"<@{u}>" for u in mention_uids_preview) if mention_uids_preview else ""
+
+    # Prepare preview for update count and last-updated timestamp
+    key = make_event_key(event_id, event_name, guild_id)
+    guild_key = guild_id if guild_id is not None else None
+    existing_log = load_log(guild_key) or {}
+    existing_entry = existing_log.get(key)
+    prev_update_count = existing_entry.get("update_count", 0) if existing_entry else 0
+    new_update_count_preview = prev_update_count + 1 if existing_entry else 0
+    last_updated_preview = datetime.now(timezone.utc).isoformat()
+
     if dry_run:
         event_start_val = sdt.isoformat() if isinstance(sdt, datetime) else (start_time if start_time else None)
         event_end_val = edt.isoformat() if isinstance(edt, datetime) else (end_time if end_time else None)
@@ -379,6 +522,10 @@ def post_event_position_posting():
             "event_start": event_start_val,
             "event_end": event_end_val,
             "target_channel_id": target_channel_id,
+            "mention_text": mention_text_preview,
+            "mention_user_ids": mention_uids_preview,
+            "update_count": new_update_count_preview,
+            "last_updated": last_updated_preview,
         }
         logger.info("Dry-run: prepared event posting payload", extra={"event_id": event_id, "target_channel_id": target_channel_id})
         logger.debug("Dry-run payload", extra={"payload": payload})
@@ -388,36 +535,123 @@ def post_event_position_posting():
         logger.error("No target channel resolved for event posting; aborting", extra={"event_id": event_id, "guild_id": guild_id})
         return jsonify({"error": "No target channel configured or provided for event posting"}), 400
 
-    async def _send():
-        bot = getattr(app, "bot", None)
-        if bot is None:
-            logger.error("Discord bot instance not available on Flask app during _send")
-            raise RuntimeError("Discord bot instance not available on Flask app")
-
-        if target_channel_id is None:
-            logger.error("Attempted to send without a target_channel_id", extra={"event_id": event_id})
-            raise RuntimeError("No target channel specified for posting")
-
-        channel = bot.get_channel(int(target_channel_id)) if target_channel_id is not None else None
-        if channel is None:
-            try:
-                channel = await bot.fetch_channel(int(target_channel_id))
-            except Exception as e:
-                logger.exception("Failed to fetch channel inside _send", exc_info=True, extra={"target_channel_id": target_channel_id})
-                raise RuntimeError(f"Failed to fetch channel {target_channel_id}: {e}")
-
-        sent = await channel.send(embed=embed)
-        return getattr(sent, "id", None)
-
     try:
         run_op = getattr(app, "run_discord_op", None)
         if run_op is None:
             logger.error("API server helper 'run_discord_op' not available on app; is the bot running?")
             raise RuntimeError("API server helper 'run_discord_op' not available on app; is the bot running?")
+
         logger.info("Posting embed to Discord", extra={"event_id": event_id, "target_channel_id": target_channel_id})
-        message_id = run_op(_send())
+
+        async def _send_embed():
+            bot = getattr(app, "bot", None)
+            if bot is None:
+                logger.error("Discord bot instance not available on Flask app during _send")
+                raise RuntimeError("Discord bot instance not available on Flask app")
+
+            if target_channel_id is None:
+                logger.error("Attempted to send without a target_channel_id", extra={"event_id": event_id})
+                raise RuntimeError("No target channel specified for posting")
+
+            channel = bot.get_channel(int(target_channel_id)) if target_channel_id is not None else None
+            if channel is None:
+                try:
+                    channel = await bot.fetch_channel(int(target_channel_id))
+                except Exception as e:
+                    logger.exception("Failed to fetch channel inside _send", exc_info=True, extra={"target_channel_id": target_channel_id})
+                    raise RuntimeError(f"Failed to fetch channel {target_channel_id}: {e}")
+
+            icon_url = None
+            try:
+                if guild_id is not None:
+                    try:
+                        g = bot.get_guild(int(guild_id))
+                    except Exception:
+                        g = None
+                    if g is not None:
+                        icon = getattr(g, "icon", None)
+                        if icon:
+                            try:
+                                icon_url = icon.url
+                            except Exception:
+                                icon_url = None
+            except Exception:
+                icon_url = None
+
+            try:
+                embed.set_footer(text="vZDC", icon_url=icon_url)
+            except Exception:
+                pass
+
+            sent = await channel.send(embed=embed)
+            return getattr(sent, "id", None)
+
+        message_id = run_op(_send_embed())
         logger.info("Posted event embed to Discord", extra={"event_id": event_id, "message_id": message_id, "target_channel_id": target_channel_id})
 
+        # Prepare mention text (space-separated mentions) from controllers list
+        mention_uids = []
+        for c in controllers:
+            try:
+                uid = _get_discord_id_from_controller(c)
+                if uid is not None:
+                    mention_uids.append(int(uid))
+            except Exception:
+                continue
+        mention_text = " ".join(f"<@{u}>" for u in mention_uids) if mention_uids else ""
+
+        # Attempt to update previous mention message when replacing existing posting, otherwise send a new message
+        mention_message_id = None
+        try:
+            key = make_event_key(event_id, event_name, guild_id)
+            guild_key = guild_id if guild_id is not None else None
+            log = load_log(guild_key) or {}
+            existing = log.get(key)
+
+            async def _send_or_update_mentions(prev_chan=None, prev_mention_id=None):
+                bot = getattr(app, "bot", None)
+                if bot is None:
+                    return None
+                try:
+                    ch = bot.get_channel(int(target_channel_id)) if target_channel_id is not None else None
+                    if ch is None:
+                        ch = await bot.fetch_channel(int(target_channel_id))
+
+                    # If there is a previous mention message in the same channel, delete it first so a fresh
+                    # message will generate new notification pings when we send.
+                    if prev_mention_id and prev_chan == target_channel_id:
+                        try:
+                            old = await ch.fetch_message(int(prev_mention_id))
+                        except Exception:
+                            old = None
+                        if old:
+                            try:
+                                await old.delete()
+                            except Exception:
+                                pass
+
+                    # Send a fresh mention message (outside embed) so Discord will ping users anew
+                    if mention_text:
+                        sent_m = await ch.send(content=mention_text)
+                        return getattr(sent_m, "id", None)
+                    return None
+                except Exception:
+                    return None
+
+            prev_mention = None
+            prev_chan = None
+            if existing:
+                prev_mention = existing.get("mention_message_id")
+                prev_chan = existing.get("channel_id")
+
+            try:
+                mention_message_id = run_op(_send_or_update_mentions(prev_chan=prev_chan, prev_mention_id=prev_mention))
+            except Exception:
+                mention_message_id = None
+        except Exception:
+            mention_message_id = None
+
+        # After successful post, persist the posting and delete any previous posting for same event
         try:
             key = make_event_key(event_id, event_name, guild_id)
             guild_key = guild_id if guild_id is not None else None
@@ -427,6 +661,7 @@ def post_event_position_posting():
             if existing:
                 prev_chan = existing.get("channel_id")
                 prev_msg = existing.get("message_id")
+                prev_mention = existing.get("mention_message_id")
                 if prev_chan and prev_msg:
                     logger.info("Found existing posting for event; attempting to delete previous message", extra={"prev_channel": prev_chan, "prev_msg": prev_msg})
                     async def _delete_prev():
@@ -447,6 +682,15 @@ def post_event_position_posting():
                                 if msg:
                                     await msg.delete()
                                     logger.info("Deleted previous event posting message", extra={"prev_channel": prev_chan, "prev_msg": prev_msg})
+                                # Attempt to delete previous mention message if present
+                                if prev_mention:
+                                    try:
+                                        m = await channel.fetch_message(int(prev_mention))
+                                    except Exception:
+                                        m = None
+                                    if m:
+                                        await m.delete()
+                                        logger.info("Deleted previous mention message", extra={"prev_channel": prev_chan, "prev_mention": prev_mention})
                                 return True
                             except Exception:
                                 logger.debug("Error while trying to delete previous message", exc_info=True, extra={"prev_channel": prev_chan, "prev_msg": prev_msg})
@@ -461,13 +705,15 @@ def post_event_position_posting():
                         logger.debug("run_op failed when attempting to delete previous message", exc_info=True)
                         pass
 
+            # record new entry including mention_message_id and update count + last_updated
             entry = {
                 "event_title": event_name,
                 "event_id": event_id,
                 "guild_id": guild_id,
                 "channel_id": target_channel_id,
                 "message_id": message_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "mention_message_id": mention_message_id,
+                "last_updated": datetime.now(timezone.utc).isoformat(),
             }
             log[key] = entry
             try:
@@ -475,12 +721,12 @@ def post_event_position_posting():
                 logger.info("Persisted posting to event log", extra={"key": key, "guild_key": guild_key})
             except Exception:
                 logger.warning("Failed to persist posting log", exc_info=True, extra={"key": key, "guild_key": guild_key})
-                return jsonify({"status": "ok", "channel_id": target_channel_id, "message_id": message_id, "warning": "failed to persist posting log"}), 200
+                return jsonify({"status": "ok", "channel_id": target_channel_id, "message_id": message_id, "mention_message_id": mention_message_id, "warning": "failed to persist posting log"}), 200
         except Exception:
             logger.debug("Error while handling posting log; continuing (non-fatal)", exc_info=True)
-            return jsonify({"status": "ok", "channel_id": target_channel_id, "message_id": message_id}), 200
+            return jsonify({"status": "ok", "channel_id": target_channel_id, "message_id": message_id, "mention_message_id": mention_message_id}), 200
 
-        return jsonify({"status": "ok", "channel_id": target_channel_id, "message_id": message_id}), 200
+        return jsonify({"status": "ok", "channel_id": target_channel_id, "message_id": message_id, "mention_message_id": mention_message_id}), 200
     except Exception as e:
         logger.exception("Failed to post event positions", exc_info=True, extra={"event_id": event_id, "target_channel_id": target_channel_id})
         return jsonify({"error": "Failed to post event positions", "detail": str(e)}), 500

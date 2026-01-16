@@ -1,3 +1,31 @@
+"""Event position posting endpoint
+
+This module implements a Flask blueprint that accepts a JSON payload describing
+an event and a set of controllers, builds a Discord Embed summarizing controller
+positions and times, and either returns a dry-run payload or posts the embed to
+Discord via the running bot.
+
+Contract
+- Endpoint: POST /event_position_posting
+- Inputs (JSON): event_name, event_id, event_description, event_banner_url,
+  event_start_time, event_end_time, controllers (list), optional channel_id,
+  optional dry_run, optional guild_id
+- Outputs: On dry_run returns JSON with prepared embed payload. On success
+  posts embed to Discord and returns status ok with channel_id/message_id.
+- Error modes: returns 4xx for bad input or missing configuration, 5xx for
+  unexpected failures while posting.
+
+Behavior highlights
+- Title is the event_name and links to https://vzdc.org/events/{event_id} when
+  event_id is provided.
+- Event Start/End are shown as separate inline embed fields (Discord timestamp
+  tags when parsable). Controller-specific signup times will be appended to
+  controller lines when they differ from the event times.
+
+The implementation is defensive and logs parsing failures rather than raising
+exceptions for non-fatal problems.
+"""
+
 from flask import Blueprint, request, jsonify
 import discord
 from datetime import datetime, timezone
@@ -14,7 +42,13 @@ bp = Blueprint("event_position_posting", __name__, url_prefix="/event_position_p
 
 
 def _safe_get(d: Dict[str, Any], key: str, default=None):
+    """Safely retrieve a key from a mapping or return a default.
+
+    This helper returns default for non-dict inputs to simplify callers that
+    accept either dicts or other types.
+    """
     return d.get(key, default) if isinstance(d, dict) else default
+
 
 RATING_ID_TO_SHORT = {
     -1: "INA",
@@ -34,33 +68,119 @@ RATING_ID_TO_SHORT = {
 }
 
 
-@bp.route("", methods=["POST"])  # POST /event_position_posting
+def _parse_controller_time_field(ctrl: Dict[str, Any]):
+    """Attempt to extract controller-specific start/end datetimes.
+
+    The function accepts a controller mapping and looks for a variety of
+    commonly used keys (signup_start, controller_final_start_time, start_time,
+    etc). Returns a tuple (start_dt, end_dt) where each element is either a
+    timezone-aware datetime (UTC) or None.
+    """
+    if not isinstance(ctrl, dict):
+        return None, None
+
+    candidates_start = [
+        "signup_start",
+        "signupStart",
+        "controller_start_time",
+        "controller_final_start_time",
+        "final_start_time",
+        "start_time",
+        "start",
+    ]
+    candidates_end = [
+        "signup_end",
+        "signupEnd",
+        "controller_end_time",
+        "controller_final_end_time",
+        "final_end_time",
+        "end_time",
+        "end",
+    ]
+
+    start_val = None
+    end_val = None
+    for k in candidates_start:
+        if k in ctrl and ctrl[k]:
+            start_val = ctrl[k]
+            break
+    for k in candidates_end:
+        if k in ctrl and ctrl[k]:
+            end_val = ctrl[k]
+            break
+
+    def _parse(val):
+        if val is None:
+            return None
+        try:
+            if isinstance(val, datetime):
+                dt = val
+            elif isinstance(val, str):
+                dt = parse_vatsim_logon_time(val) if val else None
+            else:
+                return None
+            if isinstance(dt, datetime) and dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:
+            logger.debug("Failed to parse controller time value", exc_info=True, extra={"value": val})
+            return None
+
+    return _parse(start_val), _parse(end_val)
+
+
+def _format_controller_time_span(cs: datetime | None, ce: datetime | None):
+    """Format a short human-friendly time span for controller-specific times.
+
+    When datetimes are available, Discord timestamp tags are used. If an
+    exception occurs, ISO-formatted strings are used as a fallback. If neither
+    cs nor ce are provided an empty string is returned.
+    """
+    if cs is None and ce is None:
+        return ""
+    try:
+        if cs and ce:
+            return f" — <t:{int(cs.timestamp())}:t> to <t:{int(ce.timestamp())}:t>"
+        if cs:
+            return f" — <t:{int(cs.timestamp())}:t>"
+        if ce:
+            return f" — <t:{int(ce.timestamp())}:t>"
+    except Exception:
+        try:
+            if cs and ce:
+                return f" — {cs.isoformat()} to {ce.isoformat()}"
+            if cs:
+                return f" — {cs.isoformat()}"
+            if ce:
+                return f" — {ce.isoformat()}"
+        except Exception:
+            return ""
+    return ""
+
+
+@bp.route("", methods=["POST"])
 @api_key_required
 def post_event_position_posting():
-    """Accepts a payload describing an event and a list of controllers with final positions and posts
+    """POST endpoint: prepare and post an event positions embed to Discord.
 
-    Expected JSON shape:
-    {
-        "event_name": "...",
-        "event_id": "...",
-        "event_description": "...",
-        "event_banner_url": "https://...",
-        "event_start_time": "2025-11-17T00:00:00Z",
-        "event_end_time": "2025-11-17T02:00:00Z",
-        "controllers": [
-            {"controller_name": "Alice", "controller_rating": "C1", "controller_final_position": "GND"},
-            ...
-        ],
-        "channel_id": 1234567890,   # optional override
-        "dry_run": true            # optional
-    }
+    Input JSON (required fields):
+      - event_name, event_id, event_description,
+        event_start_time, event_end_time, controllers (list)
+
+    Optional input fields:
+      - event_banner_url, channel_id (override), dry_run, guild_id
+
+    Return values:
+      - 200 + {status: 'dry_run', payload: {...}} when dry_run is true
+      - 200 + {status: 'ok', channel_id, message_id} on successful post
+      - 4xx for invalid input or missing configuration
+      - 500 for unexpected failures while posting
     """
     data = request.get_json(silent=True)
     if not data:
         logger.warning("Invalid or missing JSON payload in /event_position_posting POST")
         return jsonify({"error": "Invalid or missing JSON payload"}), 400
 
-    # required top-level fields
     required = ["event_name", "event_id", "event_description", "event_start_time", "event_end_time", "controllers"]
     for r in required:
         if r not in data:
@@ -83,8 +203,9 @@ def post_event_position_posting():
         logger.warning("Invalid controllers type in request; expected list", extra={"controllers_type": type(controllers).__name__})
         return jsonify({"error": "`controllers` must be a list"}), 400
 
-    # format times for Discord timestamps if possible
     times_str = ""
+    sdt = None
+    edt = None
     try:
         sdt = parse_vatsim_logon_time(start_time) if isinstance(start_time, str) and start_time else (start_time if isinstance(start_time, datetime) else None)
         edt = parse_vatsim_logon_time(end_time) if isinstance(end_time, str) and end_time else (end_time if isinstance(end_time, datetime) else None)
@@ -108,12 +229,10 @@ def post_event_position_posting():
         logger.debug("Failed to parse event start/end times", exc_info=True)
         times_str = ""
 
-    # Resolve announcement type properties
     post_conf = cfg.ANNOUNCEMENT_TYPES.get("event-position-posting", {})
     color_val = post_conf.get("color")
     title_prefix = post_conf.get("title_prefix", "Event Posting:")
 
-    # Resolve target channel via explicit override or guild config (if provided)
     guild_id = _safe_get(data, "guild_id")
     target_channel_id = None
     if channel_override:
@@ -123,53 +242,181 @@ def post_event_position_posting():
         target_channel_id = cfg.resolve_announcement_target_channel(guild_id, "event-position-posting")
         logger.debug("Resolved target channel from guild config", extra={"guild_id": guild_id, "target_channel_id": target_channel_id})
 
-    # Build embed
-    embed_title = f"{title_prefix} {event_name}".strip()
-    embed = discord.Embed(title=embed_title, description=event_description or "", color=discord.Color(color_val) if color_val is not None else discord.Color.default())
+    embed_title = f"{event_name}".strip()
+    event_url = None
+    try:
+        if event_id is not None:
+            event_url = f"https://vzdc.org/events/{str(event_id)}"
+    except Exception:
+        event_url = None
+    embed = discord.Embed(title=embed_title, url=event_url, description=event_description or "", color=discord.Color(color_val) if color_val is not None else discord.Color.default())
 
     if banner_url:
         try:
             embed.set_image(url=banner_url)
-        except Exception as e:
-            # ignore bad banner url
+        except Exception:
             logger.debug("Failed to set embed image", exc_info=True, extra={"banner_url": banner_url})
 
-    # Controllers: group controllers by position category (GND/TWR/APP/CTR/etc.) and add one field per category
+    try:
+        start_val = f"<t:{int(sdt.timestamp())}:F>" if isinstance(sdt, datetime) else (start_time if start_time else "N/A")
+        end_val = f"<t:{int(edt.timestamp())}:F>" if isinstance(edt, datetime) else (end_time if end_time else "N/A")
+        embed.add_field(name="Start", value=start_val, inline=True)
+        embed.add_field(name="End", value=end_val, inline=True)
+        logger.debug("Added start/end time fields to embed (above positions)", extra={"start": start_val, "end": end_val})
+    except Exception:
+        logger.debug("Failed to add start/end time fields to embed (above positions)", exc_info=True)
+
     max_fields = 25
     added = 0
 
-    # Aggregate controllers into categories using parse_position
     category_groups: dict = {}
+
+    def _get_discord_id_from_controller(ctrl: Dict[str, Any]) -> int | None:
+        candidates = ["controller_discord_id"]
+        for k in candidates:
+            v = _safe_get(ctrl, k)
+            if v is None:
+                continue
+            try:
+                sv = str(v).strip()
+            except Exception:
+                continue
+            if not sv:
+                continue
+            if sv.lower() in ("null", "none", "n/a"):
+                continue
+            try:
+                return int(sv)
+            except Exception:
+                try:
+                    return int(sv.split("#")[0])
+                except Exception:
+                    continue
+        return None
+
+    def _resolve_discord_tag_for_id(uid: int, guild_id_val: Any) -> str | None:
+        run_op = getattr(app, "run_discord_op", None)
+        if run_op is None:
+            return None
+
+        async def _fetch():
+            bot = getattr(app, "bot", None)
+            if bot is None:
+                return None
+            try:
+                if guild_id_val is not None:
+                    try:
+                        g = bot.get_guild(int(guild_id_val))
+                    except Exception:
+                        g = None
+                    if g is not None:
+                        m = g.get_member(int(uid))
+                        if m is not None:
+                            return str(m)
+                        try:
+                            m = await g.fetch_member(int(uid))
+                            if m is not None:
+                                return str(m)
+                        except Exception:
+                            pass
+                try:
+                    user = await bot.fetch_user(int(uid))
+                    if user is not None:
+                        name = getattr(user, "name", None)
+                        disc = getattr(user, "discriminator", None)
+                        if name and disc:
+                            return f"{name}#{disc}"
+                        return str(user)
+                except Exception:
+                    return None
+            except Exception:
+                return None
+            return None
+
+        try:
+            return run_op(_fetch())
+        except Exception:
+            return None
+
+    def _validate_discord_id(uid: int, guild_id_val: Any) -> bool:
+        run_op = getattr(app, "run_discord_op", None)
+        if run_op is None:
+            return False
+
+        async def _fetch():
+            bot = getattr(app, "bot", None)
+            if bot is None:
+                return False
+            try:
+                if guild_id_val is not None:
+                    try:
+                        g = bot.get_guild(int(guild_id_val))
+                    except Exception:
+                        g = None
+                    if g is not None:
+                        m = g.get_member(int(uid))
+                        if m is not None:
+                            return True
+                        try:
+                            m = await g.fetch_member(int(uid))
+                            if m is not None:
+                                return True
+                        except Exception:
+                            pass
+                try:
+                    user = await bot.fetch_user(int(uid))
+                    if user is not None:
+                        return True
+                except Exception:
+                    return False
+            except Exception:
+                return False
+            return False
+
+        try:
+            return bool(run_op(_fetch()))
+        except Exception:
+            return False
+
     for c in controllers:
         if not isinstance(c, dict):
             logger.debug("Skipping controller entry that is not a dict", extra={"entry": c})
             continue
         final_pos = _safe_get(c, "controller_final_position")
         if not final_pos:
-            # skip controllers without a final position
             logger.debug("Skipping controller with no final position", extra={"controller": c})
             continue
 
-        # determine category (e.g., GND, TWR, APP, CTR, etc.)
         try:
             category = parse_position(str(final_pos)) or "UNKNOWN"
         except Exception:
             logger.debug("Failed to parse controller final position; defaulting to UNKNOWN", exc_info=True, extra={"final_pos": final_pos})
             category = "UNKNOWN"
 
-        name = _safe_get(c, "controller_name") or "(Unnamed)"
+        configured_name = _safe_get(c, "controller_name") or "(Unnamed)"
+        display_name = configured_name
+        uid = _get_discord_id_from_controller(c)
+        if uid is not None:
+            try:
+                run_op = getattr(app, "run_discord_op", None)
+                bot_obj = getattr(app, "bot", None)
+                bot_available = run_op is not None and bot_obj is not None
+                if bot_available:
+                    if _validate_discord_id(uid, guild_id):
+                        display_name = f"<@{uid}>"
+                else:
+                    display_name = f"<@{uid}>"
+            except Exception:
+                logger.debug("Failed to resolve/validate discord id for controller; using configured name", exc_info=True, extra={"controller": c})
+
         rating = _safe_get(c, "controller_rating")
-        # format rating consistently as string if present
         rating_str = ""
         if rating is not None:
-            # If rating is an integer (or numeric string), map using RATING_ID_TO_SHORT
             try:
-                # handle ints directly
                 if isinstance(rating, int):
                     rating_str = RATING_ID_TO_SHORT.get(rating, str(rating))
                 else:
                     rs = str(rating).strip()
-                    # numeric string (e.g. "5")
                     if rs.lstrip("+-").isdigit():
                         try:
                             rid = int(rs)
@@ -177,33 +424,42 @@ def post_event_position_posting():
                         except Exception:
                             rating_str = rs.upper()
                     else:
-                        # If the provided value is already a known short code, normalize it.
                         up = rs.upper()
                         if up in set(RATING_ID_TO_SHORT.values()):
                             rating_str = up
                         else:
-                            # Fallback: use the string representation (uppercased for consistency)
                             rating_str = up
             except Exception:
                 logger.debug("Failed to normalize controller rating", exc_info=True, extra={"rating": rating})
                 rating_str = str(rating)
 
-        # readable line for this controller
+        try:
+            cs, ce = _parse_controller_time_field(c)
+            show_times = False
+            if cs is not None:
+                if sdt is None or int(cs.timestamp()) != int(sdt.timestamp()):
+                    show_times = True
+            if ce is not None and not show_times:
+                if edt is None or int(ce.timestamp()) != int(edt.timestamp()):
+                    show_times = True
+            time_suffix = _format_controller_time_span(cs, ce) if show_times else ""
+        except Exception:
+            logger.debug("Failed to parse/format controller-specific times", exc_info=True, extra={"controller": c})
+            time_suffix = ""
+
         if rating_str:
-            line = f"{name} ({rating_str}) — {final_pos}"
+            line = f"{display_name} ({rating_str}) — {final_pos}{time_suffix}"
         else:
-            line = f"{name} — {final_pos}"
+            line = f"{display_name} — {final_pos}{time_suffix}"
 
         category_groups.setdefault(category, []).append(line)
 
     logger.debug("Grouped controllers into categories", extra={"category_counts": {k: len(v) for k, v in category_groups.items()}})
 
-    # Preferred display order for categories, fall back to remaining sorted keys
     preferred_order = ["RMP", "DEL", "GND", "TWR", "DEP", "APP", "CTR", "CIC", "TMU", "OTHER", "UNKNOWN"]
     remaining = [k for k in category_groups.keys() if k not in preferred_order]
     ordered_keys = [k for k in preferred_order if k in category_groups] + sorted(remaining)
 
-    # Add one embed field per category with all controllers in that category (truncate if too long)
     for cat in ordered_keys:
         if added >= max_fields:
             logger.info("Reached max embed fields limit; skipping remaining categories", extra={"added": added, "max_fields": max_fields})
@@ -213,10 +469,8 @@ def post_event_position_posting():
             continue
 
         field_name = f"{cat} ({len(members)})"
-        # join members with newlines; Discord field value max ~1024 characters
         value = "\n".join(members)
         if len(value) > 1000:
-            # try to truncate gracefully while keeping whole lines
             parts = []
             cur_len = 0
             for m in members:
@@ -231,67 +485,171 @@ def post_event_position_posting():
         embed.add_field(name=field_name, value=value, inline=False)
         added += 1
 
-    # If no category fields were added, add a summary field
     if added == 0:
         logger.info("No controllers provided or none valid; adding placeholder field to embed", extra={"event_id": event_id})
         embed.add_field(name="Controllers", value="No controllers provided or none valid.", inline=False)
 
-    # Append times to title or description for visibility
-    if times_str:
-        # tack onto title for compact view
-        embed.title = f"{embed.title}{times_str}"
-        logger.debug("Appended formatted times to embed title", extra={"times_str": times_str})
+    # Compute mention UIDs and mention text for dry-run preview
+    mention_uids_preview = []
+    for c in controllers:
+        try:
+            uid_val = _get_discord_id_from_controller(c)
+            if uid_val is not None:
+                mention_uids_preview.append(int(uid_val))
+        except Exception:
+            continue
+    mention_text_preview = " ".join(f"<@{u}>" for u in mention_uids_preview) if mention_uids_preview else ""
 
-    # Dry-run: return the prepared payload
+    # Prepare preview for update count and last-updated timestamp
+    key = make_event_key(event_id, event_name, guild_id)
+    guild_key = guild_id if guild_id is not None else None
+    existing_log = load_log(guild_key) or {}
+    existing_entry = existing_log.get(key)
+    prev_update_count = existing_entry.get("update_count", 0) if existing_entry else 0
+    new_update_count_preview = prev_update_count + 1 if existing_entry else 0
+    last_updated_preview = datetime.now(timezone.utc).isoformat()
+
     if dry_run:
+        event_start_val = sdt.isoformat() if isinstance(sdt, datetime) else (start_time if start_time else None)
+        event_end_val = edt.isoformat() if isinstance(edt, datetime) else (end_time if end_time else None)
         payload = {
             "title": embed.title,
             "description": embed.description,
             "color": color_val,
             "image_url": banner_url,
             "fields": [{"name": f.name, "value": f.value} for f in embed.fields],
+            "event_url": event_url,
+            "event_start": event_start_val,
+            "event_end": event_end_val,
             "target_channel_id": target_channel_id,
+            "mention_text": mention_text_preview,
+            "mention_user_ids": mention_uids_preview,
+            "update_count": new_update_count_preview,
+            "last_updated": last_updated_preview,
         }
         logger.info("Dry-run: prepared event posting payload", extra={"event_id": event_id, "target_channel_id": target_channel_id})
         logger.debug("Dry-run payload", extra={"payload": payload})
         return jsonify({"status": "dry_run", "payload": payload}), 200
 
-    # If we don't have a target channel by this point, fail early with a helpful message
     if target_channel_id is None:
         logger.error("No target channel resolved for event posting; aborting", extra={"event_id": event_id, "guild_id": guild_id})
         return jsonify({"error": "No target channel configured or provided for event posting"}), 400
-
-    # Send to Discord via app.run_discord_op
-    async def _send():
-        bot = getattr(app, "bot", None)
-        if bot is None:
-            logger.error("Discord bot instance not available on Flask app during _send")
-            raise RuntimeError("Discord bot instance not available on Flask app")
-
-        # target_channel_id must be present here; guard against accidental None to avoid TypeError from int(None)
-        if target_channel_id is None:
-            logger.error("Attempted to send without a target_channel_id", extra={"event_id": event_id})
-            raise RuntimeError("No target channel specified for posting")
-
-        channel = bot.get_channel(int(target_channel_id)) if target_channel_id is not None else None
-        if channel is None:
-            try:
-                channel = await bot.fetch_channel(int(target_channel_id))
-            except Exception as e:
-                logger.exception("Failed to fetch channel inside _send", exc_info=True, extra={"target_channel_id": target_channel_id})
-                raise RuntimeError(f"Failed to fetch channel {target_channel_id}: {e}")
-
-        sent = await channel.send(embed=embed)
-        return getattr(sent, "id", None)
 
     try:
         run_op = getattr(app, "run_discord_op", None)
         if run_op is None:
             logger.error("API server helper 'run_discord_op' not available on app; is the bot running?")
             raise RuntimeError("API server helper 'run_discord_op' not available on app; is the bot running?")
+
         logger.info("Posting embed to Discord", extra={"event_id": event_id, "target_channel_id": target_channel_id})
-        message_id = run_op(_send())
+
+        async def _send_embed():
+            bot = getattr(app, "bot", None)
+            if bot is None:
+                logger.error("Discord bot instance not available on Flask app during _send")
+                raise RuntimeError("Discord bot instance not available on Flask app")
+
+            if target_channel_id is None:
+                logger.error("Attempted to send without a target_channel_id", extra={"event_id": event_id})
+                raise RuntimeError("No target channel specified for posting")
+
+            channel = bot.get_channel(int(target_channel_id)) if target_channel_id is not None else None
+            if channel is None:
+                try:
+                    channel = await bot.fetch_channel(int(target_channel_id))
+                except Exception as e:
+                    logger.exception("Failed to fetch channel inside _send", exc_info=True, extra={"target_channel_id": target_channel_id})
+                    raise RuntimeError(f"Failed to fetch channel {target_channel_id}: {e}")
+
+            icon_url = None
+            try:
+                if guild_id is not None:
+                    try:
+                        g = bot.get_guild(int(guild_id))
+                    except Exception:
+                        g = None
+                    if g is not None:
+                        icon = getattr(g, "icon", None)
+                        if icon:
+                            try:
+                                icon_url = icon.url
+                            except Exception:
+                                icon_url = None
+            except Exception:
+                icon_url = None
+
+            try:
+                embed.set_footer(text="vZDC", icon_url=icon_url)
+            except Exception:
+                pass
+
+            sent = await channel.send(embed=embed)
+            return getattr(sent, "id", None)
+
+        message_id = run_op(_send_embed())
         logger.info("Posted event embed to Discord", extra={"event_id": event_id, "message_id": message_id, "target_channel_id": target_channel_id})
+
+        # Prepare mention text (space-separated mentions) from controllers list
+        mention_uids = []
+        for c in controllers:
+            try:
+                uid = _get_discord_id_from_controller(c)
+                if uid is not None:
+                    mention_uids.append(int(uid))
+            except Exception:
+                continue
+        mention_text = " ".join(f"<@{u}>" for u in mention_uids) if mention_uids else ""
+
+        # Attempt to update previous mention message when replacing existing posting, otherwise send a new message
+        mention_message_id = None
+        try:
+            key = make_event_key(event_id, event_name, guild_id)
+            guild_key = guild_id if guild_id is not None else None
+            log = load_log(guild_key) or {}
+            existing = log.get(key)
+
+            async def _send_or_update_mentions(prev_chan=None, prev_mention_id=None):
+                bot = getattr(app, "bot", None)
+                if bot is None:
+                    return None
+                try:
+                    ch = bot.get_channel(int(target_channel_id)) if target_channel_id is not None else None
+                    if ch is None:
+                        ch = await bot.fetch_channel(int(target_channel_id))
+
+                    # If there is a previous mention message in the same channel, delete it first so a fresh
+                    # message will generate new notification pings when we send.
+                    if prev_mention_id and prev_chan == target_channel_id:
+                        try:
+                            old = await ch.fetch_message(int(prev_mention_id))
+                        except Exception:
+                            old = None
+                        if old:
+                            try:
+                                await old.delete()
+                            except Exception:
+                                pass
+
+                    # Send a fresh mention message (outside embed) so Discord will ping users anew
+                    if mention_text:
+                        sent_m = await ch.send(content=mention_text)
+                        return getattr(sent_m, "id", None)
+                    return None
+                except Exception:
+                    return None
+
+            prev_mention = None
+            prev_chan = None
+            if existing:
+                prev_mention = existing.get("mention_message_id")
+                prev_chan = existing.get("channel_id")
+
+            try:
+                mention_message_id = run_op(_send_or_update_mentions(prev_chan=prev_chan, prev_mention_id=prev_mention))
+            except Exception:
+                mention_message_id = None
+        except Exception:
+            mention_message_id = None
 
         # After successful post, persist the posting and delete any previous posting for same event
         try:
@@ -303,9 +661,9 @@ def post_event_position_posting():
             if existing:
                 prev_chan = existing.get("channel_id")
                 prev_msg = existing.get("message_id")
+                prev_mention = existing.get("mention_message_id")
                 if prev_chan and prev_msg:
                     logger.info("Found existing posting for event; attempting to delete previous message", extra={"prev_channel": prev_chan, "prev_msg": prev_msg})
-                    # Try to delete previous message asynchronously via run_op
                     async def _delete_prev():
                         try:
                             bot = getattr(app, "bot", None)
@@ -316,16 +674,23 @@ def post_event_position_posting():
                                 channel = bot.get_channel(int(prev_chan)) if prev_chan is not None else None
                                 if channel is None:
                                     channel = await bot.fetch_channel(int(prev_chan))
-                                # fetch message and delete
                                 try:
                                     msg = await channel.fetch_message(int(prev_msg))
                                 except Exception:
-                                    # message may be already deleted or fetch failed
                                     logger.debug("Failed to fetch previous message; it may already be deleted", extra={"prev_channel": prev_chan, "prev_msg": prev_msg})
                                     msg = None
                                 if msg:
                                     await msg.delete()
                                     logger.info("Deleted previous event posting message", extra={"prev_channel": prev_chan, "prev_msg": prev_msg})
+                                # Attempt to delete previous mention message if present
+                                if prev_mention:
+                                    try:
+                                        m = await channel.fetch_message(int(prev_mention))
+                                    except Exception:
+                                        m = None
+                                    if m:
+                                        await m.delete()
+                                        logger.info("Deleted previous mention message", extra={"prev_channel": prev_chan, "prev_mention": prev_mention})
                                 return True
                             except Exception:
                                 logger.debug("Error while trying to delete previous message", exc_info=True, extra={"prev_channel": prev_chan, "prev_msg": prev_msg})
@@ -335,21 +700,20 @@ def post_event_position_posting():
                             return False
 
                     try:
-                        # fire deletion; ignore result but attempt it
                         run_op(_delete_prev())
                     except Exception:
                         logger.debug("run_op failed when attempting to delete previous message", exc_info=True)
-                        # ignore deletion failure; proceed to update log
                         pass
 
-            # record new entry
+            # record new entry including mention_message_id and update count + last_updated
             entry = {
                 "event_title": event_name,
                 "event_id": event_id,
                 "guild_id": guild_id,
                 "channel_id": target_channel_id,
                 "message_id": message_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "mention_message_id": mention_message_id,
+                "last_updated": datetime.now(timezone.utc).isoformat(),
             }
             log[key] = entry
             try:
@@ -357,14 +721,12 @@ def post_event_position_posting():
                 logger.info("Persisted posting to event log", extra={"key": key, "guild_key": guild_key})
             except Exception:
                 logger.warning("Failed to persist posting log", exc_info=True, extra={"key": key, "guild_key": guild_key})
-                # If saving the log fails, we still succeeded in posting; surface error to caller
-                return jsonify({"status": "ok", "channel_id": target_channel_id, "message_id": message_id, "warning": "failed to persist posting log"}), 200
+                return jsonify({"status": "ok", "channel_id": target_channel_id, "message_id": message_id, "mention_message_id": mention_message_id, "warning": "failed to persist posting log"}), 200
         except Exception:
             logger.debug("Error while handling posting log; continuing (non-fatal)", exc_info=True)
-            # Any error while handling logs should not break the main success path
-            return jsonify({"status": "ok", "channel_id": target_channel_id, "message_id": message_id}), 200
+            return jsonify({"status": "ok", "channel_id": target_channel_id, "message_id": message_id, "mention_message_id": mention_message_id}), 200
 
-        return jsonify({"status": "ok", "channel_id": target_channel_id, "message_id": message_id}), 200
+        return jsonify({"status": "ok", "channel_id": target_channel_id, "message_id": message_id, "mention_message_id": mention_message_id}), 200
     except Exception as e:
         logger.exception("Failed to post event positions", exc_info=True, extra={"event_id": event_id, "target_channel_id": target_channel_id})
         return jsonify({"error": "Failed to post event positions", "detail": str(e)}), 500

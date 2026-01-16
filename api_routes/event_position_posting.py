@@ -201,8 +201,16 @@ def post_event_position_posting():
         logger.debug("Resolved target channel from guild config", extra={"guild_id": guild_id, "target_channel_id": target_channel_id})
 
     # Build embed
-    embed_title = f"{title_prefix} {event_name}".strip()
-    embed = discord.Embed(title=embed_title, description=event_description or "", color=discord.Color(color_val) if color_val is not None else discord.Color.default())
+    # Use only the event name as the title (remove the generic prefix)
+    embed_title = f"{event_name}".strip()
+    # Make the event title a hyperlink to the event page when we have an event_id
+    event_url = None
+    try:
+        if event_id is not None:
+            event_url = f"https://vzdc.org/events/{str(event_id)}"
+    except Exception:
+        event_url = None
+    embed = discord.Embed(title=embed_title, url=event_url, description=event_description or "", color=discord.Color(color_val) if color_val is not None else discord.Color.default())
 
     if banner_url:
         try:
@@ -210,6 +218,17 @@ def post_event_position_posting():
         except Exception as e:
             # ignore bad banner url
             logger.debug("Failed to set embed image", exc_info=True, extra={"banner_url": banner_url})
+
+    # Add Start/End as their own fields so they appear above the positions
+    try:
+        # sdt/edt were parsed earlier; show human-friendly Discord full timestamps when available
+        start_val = f"<t:{int(sdt.timestamp())}:F>" if isinstance(sdt, datetime) else (start_time if start_time else "N/A")
+        end_val = f"<t:{int(edt.timestamp())}:F>" if isinstance(edt, datetime) else (end_time if end_time else "N/A")
+        embed.add_field(name="Start", value=start_val, inline=True)
+        embed.add_field(name="End", value=end_val, inline=True)
+        logger.debug("Added start/end time fields to embed (above positions)", extra={"start": start_val, "end": end_val})
+    except Exception:
+        logger.debug("Failed to add start/end time fields to embed (above positions)", exc_info=True)
 
     # Controllers: group controllers by position category (GND/TWR/APP/CTR/etc.) and add one field per category
     max_fields = 25
@@ -329,20 +348,20 @@ def post_event_position_posting():
         logger.info("No controllers provided or none valid; adding placeholder field to embed", extra={"event_id": event_id})
         embed.add_field(name="Controllers", value="No controllers provided or none valid.", inline=False)
 
-    # Append times to title or description for visibility
-    if times_str:
-        # tack onto title for compact view
-        embed.title = f"{embed.title}{times_str}"
-        logger.debug("Appended formatted times to embed title", extra={"times_str": times_str})
-
     # Dry-run: return the prepared payload
     if dry_run:
+        # include normalized event start/end in the dry-run payload for inspection
+        event_start_val = sdt.isoformat() if isinstance(sdt, datetime) else (start_time if start_time else None)
+        event_end_val = edt.isoformat() if isinstance(edt, datetime) else (end_time if end_time else None)
         payload = {
             "title": embed.title,
             "description": embed.description,
             "color": color_val,
             "image_url": banner_url,
             "fields": [{"name": f.name, "value": f.value} for f in embed.fields],
+            "event_url": event_url,
+            "event_start": event_start_val,
+            "event_end": event_end_val,
             "target_channel_id": target_channel_id,
         }
         logger.info("Dry-run: prepared event posting payload", extra={"event_id": event_id, "target_channel_id": target_channel_id})

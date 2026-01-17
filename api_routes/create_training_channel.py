@@ -1,4 +1,27 @@
-# python
+"""
+create_training_channel.py
+
+Purpose:
+- Exposes a Flask blueprint route (/create_training_channel) used to create a per-student
+  Discord training text channel when called by an external system (webhook/API).
+
+What it does:
+- Accepts a POST JSON payload containing `student`, `primaryTrainer`, and optional
+  `otherTrainers` objects (each should include a discordUid). The student object must
+  also include firstName, lastName and cid.
+- Locates the guild the student is a member of (using the bot instance attached to the
+  Flask app), resolves trainer member objects when possible, creates a channel named
+  `firstname-lastname-cid` under the guild's configured training category (if configured),
+  and sets permission overwrites so only the student and trainers can view/send messages.
+- Posts a welcome embed that pings the student and trainers. The welcome post is best-effort
+  (failures to send the message are logged but do not cause the API call to fail).
+
+Notes:
+- The implementation uses `app.bot` for the discord client and the helper `app.run_discord_op`
+  to run the coroutine from Flask. Errors in resolving members/channels are handled
+  gracefully and logged.
+"""
+
 from flask import Blueprint, request, jsonify
 from extensions.api_server import app, api_key_required
 import discord
@@ -13,9 +36,8 @@ logger = logging.getLogger(__name__)
 
 def _slugify(s: str) -> str:
     s = (s or "").strip().lower()
-    # Remove any characters that aren't word chars, spaces or hyphens
+    # Remove characters that aren't word chars, spaces or hyphens and collapse whitespace
     s = re.sub(r"[^\w\s-]", "", s)
-    # Replace whitespace/underscores with single hyphen
     s = re.sub(r"[\s_]+", "-", s)
     return s
 
@@ -23,14 +45,10 @@ def _slugify(s: str) -> str:
 @bp.route("", methods=["POST"])
 @api_key_required
 def create_training_channel():
-    """Endpoint to create a per-student training channel.
+    """Create a per-student training channel.
 
-    Expects JSON body containing `student`, `primaryTrainer` and optional `otherTrainers` as in the incoming webhook.
-    The student must have `discordUid`, `firstName`, `lastName`, `cid`.
-
-    The route will find the guild where the student is a member, create a channel named
-    `firstname-lastname-cid` under that guild's configured training category, and set permission
-    overwrites so only the student and trainers can view/send messages.
+    Expects JSON body containing `student`, `primaryTrainer` and optional `otherTrainers`.
+    The student must include `discordUid`, `firstName`, `lastName`, `cid`.
     """
 
     data = request.get_json(silent=True)
@@ -186,8 +204,8 @@ def create_training_channel():
         for m in other_members:
             overwrites[m] = allow_member_perms(m)
 
-        # Create channel under the category if available
-        # Provide a reason so this action is visible in audit logs and can be filtered by the logger
+        # Create the text channel under the resolved category (or guild root if none).
+        # A reason is provided so the action is visible in audit logs.
         logger.info("Creating channel %s in guild %s under category %s", channel_name, target_guild.id, getattr(category_obj, "id", None))
         channel = await target_guild.create_text_channel(channel_name, overwrites=overwrites, category=category_obj, reason="create_training_channel (API)")
         logger.info("Created channel %s (id=%s) in guild %s", channel.name, channel.id, target_guild.id)
@@ -213,16 +231,22 @@ def create_training_channel():
             # Student mention (greet) - prefer Member.mention
             student_mention = student_member.mention if student_member else f"<@{student_uid}>"
 
-            # Build a minimal embed with only the requested content
+            # Build the welcome embed posted to the channel
             embed = discord.Embed(title="Welcome to your training channel", color=discord.Color.green())
             embed.description = (
                 f"{student_mention}\n\n"
                 f"You have recently been assigned to a training team with: {trainers_text}\n\n"
-                "Please use this channel to coordinate availability and to ask questions regarding your training."
+                "Please use this channel to coordinate availability and to ask questions regarding your training.\n\n"
+                "Please use this channel to communicate with your training team. Feel free to ask questions regarding your training and work with  your team to schedule sessions here."
             )
+            # Add a small footer (vZDC) and use the guild icon if available
+            try:
+                embed.set_footer(text="vZDC", icon_url=target_guild.icon.url if getattr(target_guild, 'icon', None) else None)
+            except Exception:
+                logger.debug("Failed to set embed footer with guild icon; continuing without footer")
 
-            # Send trainer mentions as message content so they receive notifications; embed holds the instructions
-            # Include the student mention as well so they are pinged
+            # Send trainer + student mentions as the message content (so they are pinged);
+            # the embed contains the instructions.
             content_parts = []
             if student_mention:
                 content_parts.append(str(student_mention))
@@ -234,7 +258,7 @@ def create_training_channel():
             logger.info("Welcome message sent to channel id=%s", channel.id)
         except Exception:
             logger.exception("Failed to send welcome message to channel id=%s", getattr(channel, "id", "<unknown>"))
-            # Best-effort only; don't fail the API if the welcome message can't be sent
+            # Continue; posting the welcome message should not cause the whole operation to fail
             pass
 
         return {"status": "created", "channel_id": channel.id, "guild_id": target_guild.id}

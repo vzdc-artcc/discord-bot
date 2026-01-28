@@ -10,9 +10,11 @@ import config as cfg
 
 from utils.vatsim import parse_vatsim_logon_time
 
+from config import VATUSA_API_KEY
+from config import VATUSA_API_URL
+from utils.vatusa import get_real_name
 
 online_zdc_controllers: list = []
-
 
 def is_controller_active(controller: dict) -> bool:
     """Return True if the given controller entry represents an active connection.
@@ -158,7 +160,19 @@ class Staffup(commands.Cog):
                                     title=f"{offline_ctrl_data['vatsimData']['callsign']} - Offline",
                                     color=discord.Color.red()
                                 )
-                                embed.add_field(name="Name", value=f"{offline_ctrl_data['vatsimData']['realName']} ({offline_ctrl_data['vatsimData']['userRating']})",
+
+                                name = offline_ctrl_data['vatsimData']['realName']
+                                if name == cid:
+                                    res = get_real_name(cid, VATUSA_API_URL)
+                                    if res != "Unknown User":
+                                        real_name = res
+                                    else:
+                                        real_name = name
+                                        logger.warning(f"Could not fetch real name for CID from VATUSA. CID: {cid}, API_URL: {VATUSA_API_URL}, Response: {res}")
+                                else:
+                                    real_name = name
+
+                                embed.add_field(name="Name", value=f"{real_name} ({offline_ctrl_data['vatsimData']['userRating']})",
                                                 inline=True)
                                 embed.add_field(name="Frequency", value=f"{offline_ctrl_data['vatsimData']['primaryFrequency']/1e6:.3f}", inline=True)
 
@@ -223,7 +237,19 @@ class Staffup(commands.Cog):
                                     title=f"{online_ctrl_data['vatsimData']['callsign']} - Online",
                                     color=discord.Color.green()
                                 )
-                                embed.add_field(name="Name", value=f"{online_ctrl_data['vatsimData']['realName']} ({online_ctrl_data['vatsimData']['userRating']})")
+                                name = online_ctrl_data['vatsimData']['realName']
+                                if name == cid:
+                                    res = get_real_name(cid, VATUSA_API_URL)
+                                    if res != "Unknown User":
+                                        real_name = res
+                                    else:
+                                        real_name = name
+                                        logger.warning(f"Could not fetch real name for CID from VATUSA. CID: {cid}, API_URL: {VATUSA_API_URL}, Response: {res}, name: {name}")
+                                else:
+                                    real_name = name
+
+                                embed.add_field(name="Name", value=f"{real_name} ({online_ctrl_data['vatsimData']['userRating']})",
+                                                inline=True)
                                 embed.add_field(name="Frequency", value=f"{online_ctrl_data['vatsimData']['primaryFrequency']/1e6:.3f}", inline=True)
                                 embed.add_field(name="Logon Time", value=f"<t:{int(online_ctrl_data['login_time_utc'].timestamp())}:t>", inline=True)
 

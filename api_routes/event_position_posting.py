@@ -158,6 +158,37 @@ def _format_controller_time_span(cs: datetime | None, ce: datetime | None):
     return ""
 
 
+def _normalize_bool(val, default=True):
+    """Normalize various boolean-like inputs to a Python bool.
+
+    Accepts real booleans, numeric 0/1, and common strings for true/false.
+    Falls back to `default` when value is None or unrecognized.
+    """
+    if isinstance(val, bool):
+        return val
+    if val is None:
+        return default
+    if isinstance(val, (int, float)):
+        try:
+            return bool(int(val))
+        except Exception:
+            return default
+    if isinstance(val, str):
+        s = val.strip().lower()
+        if s in ("", "none", "null"):
+            return default
+        if s in ("false", "0", "no", "off"):
+            return False
+        if s in ("true", "1", "yes", "on"):
+            return True
+        # fallback: try numeric
+        try:
+            return bool(int(s))
+        except Exception:
+            return default
+    return default
+
+
 @bp.route("", methods=["POST"])
 @api_key_required
 def post_event_position_posting():
@@ -196,8 +227,12 @@ def post_event_position_posting():
     controllers = _safe_get(data, "controllers")
     channel_override = _safe_get(data, "channel_id")
     dry_run = bool(_safe_get(data, "dry_run", False))
+    # New flag: whether to ping users (send mention message). Default True for backwards compatibility.
+    raw_ping = _safe_get(data, "ping_users", True)
+    ping_users = _normalize_bool(raw_ping, default=True)
 
     logger.debug("Processing event_position_posting request", extra={"event_id": event_id, "event_name": event_name, "guild_id": _safe_get(data, "guild_id"), "dry_run": dry_run, "channel_override": channel_override})
+    logger.debug("Parsed ping_users flag for event_position_posting", extra={"event_id": event_id, "ping_users": ping_users})
 
     if not isinstance(controllers, list):
         logger.warning("Invalid controllers type in request; expected list", extra={"controllers_type": type(controllers).__name__})
@@ -498,7 +533,8 @@ def post_event_position_posting():
                 mention_uids_preview.append(int(uid_val))
         except Exception:
             continue
-    mention_text_preview = " ".join(f"<@{u}>" for u in mention_uids_preview) if mention_uids_preview else ""
+    # If ping_users is False we intentionally omit mention text for preview; UIDs are still provided for reference.
+    mention_text_preview = " ".join(f"<@{u}>" for u in mention_uids_preview) if mention_uids_preview and ping_users else ""
 
     # Prepare preview for update count and last-updated timestamp
     key = make_event_key(event_id, event_name, guild_id)
@@ -524,6 +560,7 @@ def post_event_position_posting():
             "target_channel_id": target_channel_id,
             "mention_text": mention_text_preview,
             "mention_user_ids": mention_uids_preview,
+            "ping_users": ping_users,
             "update_count": new_update_count_preview,
             "last_updated": last_updated_preview,
         }
@@ -598,7 +635,10 @@ def post_event_position_posting():
                     mention_uids.append(int(uid))
             except Exception:
                 continue
-        mention_text = " ".join(f"<@{u}>" for u in mention_uids) if mention_uids else ""
+        # If ping_users is False we still attempt to delete any prior mention message but do not send new mention content.
+        mention_text = " ".join(f"<@{u}>" for u in mention_uids) if mention_uids and ping_users else ""
+        if not ping_users:
+            logger.info("ping_users is False: will not send mention text; will delete prior mention message if present", extra={"event_id": event_id})
 
         # Attempt to update previous mention message when replacing existing posting, otherwise send a new message
         mention_message_id = None
@@ -713,6 +753,7 @@ def post_event_position_posting():
                 "channel_id": target_channel_id,
                 "message_id": message_id,
                 "mention_message_id": mention_message_id,
+                "ping_users": ping_users,
                 "last_updated": datetime.now(timezone.utc).isoformat(),
             }
             log[key] = entry

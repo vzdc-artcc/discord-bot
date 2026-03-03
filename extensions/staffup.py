@@ -7,47 +7,14 @@ from discord.ext import commands, tasks
 from bot import logger
 from discord import Embed
 import config as cfg
+from utils.vatsim import is_controller_active
 
 from utils.vatsim import parse_vatsim_logon_time
 
-from config import VATUSA_API_KEY
 from config import VATUSA_API_URL
 from utils.vatusa import get_real_name
 
 online_zdc_controllers: list = []
-
-def is_controller_active(controller: dict) -> bool:
-    """Return True if the given controller entry represents an active connection.
-
-    The data feed can represent activity in different places depending on version:
-    - top-level `isActive`
-    - `vatsimData.isActive`
-    - any entry in `connections` with `isActive` True
-    - any `positions` entry with `isActive` True
-    """
-    try:
-        if controller.get("isActive"):
-            return True
-
-        vatsim = controller.get("vatsimData") or {}
-        if vatsim.get("isActive"):
-            return True
-
-        for conn in controller.get("connections", []):
-            if conn and conn.get("isActive"):
-                return True
-
-        for pos in controller.get("positions", []):
-            if pos and pos.get("isActive"):
-                return True
-
-    except Exception:
-        # If anything unexpected occurs, err on the side of not treating the
-        # controller as active to avoid false-positives.
-        return False
-
-    return False
-
 
 class Staffup(commands.Cog):
     """Staffup related commands."""
@@ -74,6 +41,7 @@ class Staffup(commands.Cog):
             self.check_online_controllers.cancel()
         except Exception:
             logger.exception("Error occurred while stopping check_online_controllers task loop.")
+
 
     @tasks.loop(seconds=10.0)
     async def check_online_controllers(self):

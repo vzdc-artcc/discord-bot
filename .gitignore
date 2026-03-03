@@ -202,3 +202,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+/data/event_position_postings_guild_1441276520927596587.json
+/data/breakboard_selector_message_id_1441276520927596587.json
+/data/notification_message_id_1441276520927596587.json
+/data/impromptu_selector_message_id_1441276520927596587.json
+/tools/

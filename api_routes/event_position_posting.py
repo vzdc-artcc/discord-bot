@@ -28,7 +28,7 @@ exceptions for non-fatal problems.
 
 from flask import Blueprint, request, jsonify
 import discord
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any
 
 from extensions.api_server import app, api_key_required
@@ -231,8 +231,13 @@ def post_event_position_posting():
     raw_ping = _safe_get(data, "ping_users", True)
     ping_users = _normalize_bool(raw_ping, default=True)
 
+    # New: whether event buffering (±1 hour) is enabled for this event. Default False.
+    raw_enable_buffer = _safe_get(data, "enable_buffer_times", False)
+    enable_buffer_times = _normalize_bool(raw_enable_buffer, default=False)
+
     logger.debug("Processing event_position_posting request", extra={"event_id": event_id, "event_name": event_name, "guild_id": _safe_get(data, "guild_id"), "dry_run": dry_run, "channel_override": channel_override})
     logger.debug("Parsed ping_users flag for event_position_posting", extra={"event_id": event_id, "ping_users": ping_users})
+    logger.debug("Parsed enable_buffer_times flag for event_position_posting", extra={"event_id": event_id, "enable_buffer_times": enable_buffer_times})
 
     if not isinstance(controllers, list):
         logger.warning("Invalid controllers type in request; expected list", extra={"controllers_type": type(controllers).__name__})
@@ -263,6 +268,18 @@ def post_event_position_posting():
     except Exception:
         logger.debug("Failed to parse event start/end times", exc_info=True)
         times_str = ""
+
+    # Compute buffer bounds when buffering is enabled and event times parsed
+    buffer_start = None
+    buffer_end = None
+    try:
+        if enable_buffer_times and isinstance(sdt, datetime) and isinstance(edt, datetime):
+            buffer_start = sdt - timedelta(hours=1)
+            buffer_end = edt + timedelta(hours=1)
+            logger.debug("Computed buffer bounds for event", extra={"buffer_start": buffer_start.isoformat(), "buffer_end": buffer_end.isoformat()})
+    except Exception:
+        buffer_start = None
+        buffer_end = None
 
     post_conf = cfg.ANNOUNCEMENT_TYPES.get("event-position-posting", {})
     color_val = post_conf.get("color")
@@ -300,6 +317,13 @@ def post_event_position_posting():
         logger.debug("Added start/end time fields to embed (above positions)", extra={"start": start_val, "end": end_val})
     except Exception:
         logger.debug("Failed to add start/end time fields to embed (above positions)", exc_info=True)
+
+    # If buffering enabled, add a short note to the embed so viewers know positions may include buffer time
+    try:
+        if enable_buffer_times and buffer_start is not None and buffer_end is not None:
+            embed.add_field(name="Buffering", value="Buffered times enabled — some positions may extend ±1 hour around event start/end.", inline=False)
+    except Exception:
+        logger.debug("Failed to add buffering field to embed", exc_info=True)
 
     max_fields = 25
     added = 0
@@ -468,8 +492,14 @@ def post_event_position_posting():
                 logger.debug("Failed to normalize controller rating", exc_info=True, extra={"rating": rating})
                 rating_str = str(rating)
 
+        # Ensure marker_tag exists even if controller time parsing fails
+        marker_tag = ""
         try:
             cs, ce = _parse_controller_time_field(c)
+
+            # Determine whether to show controller-specific times. Preserve
+            # previous behavior (show when different from event times) but also
+            # show times when buffer/opener/closer markers apply.
             show_times = False
             if cs is not None:
                 if sdt is None or int(cs.timestamp()) != int(sdt.timestamp()):
@@ -477,15 +507,55 @@ def post_event_position_posting():
             if ce is not None and not show_times:
                 if edt is None or int(ce.timestamp()) != int(edt.timestamp()):
                     show_times = True
+
+            # Determine opener/closer markers when buffering is enabled.
+            try:
+                is_opener = False
+                is_closer = False
+                is_full_buffer = False
+                if enable_buffer_times and isinstance(sdt, datetime) and isinstance(edt, datetime):
+                    if cs is not None and cs < sdt:
+                        is_opener = True
+                    if ce is not None and ce > edt:
+                        is_closer = True
+                    if cs is not None and ce is not None and buffer_start is not None and buffer_end is not None:
+                        if cs <= buffer_start and ce >= buffer_end:
+                            is_full_buffer = True
+                # If either opener/closer/full-buffer, show times so final times are visible
+                if is_full_buffer:
+                    marker_tag = "Opener/Closer"
+                    show_times = True
+                else:
+                    if is_opener and is_closer:
+                        marker_tag = "Opener/Closer"
+                        show_times = True
+                    elif is_opener:
+                        marker_tag = "Opener"
+                        show_times = True
+                    elif is_closer:
+                        marker_tag = "Closer"
+                        show_times = True
+            except Exception:
+                # ignore marker computation errors; fallback to no marker
+                marker_tag = ""
+
             time_suffix = _format_controller_time_span(cs, ce) if show_times else ""
         except Exception:
             logger.debug("Failed to parse/format controller-specific times", exc_info=True, extra={"controller": c})
             time_suffix = ""
 
+        # Build display name and put marker after the rating
         if rating_str:
-            line = f"{display_name} ({rating_str}) — {final_pos}{time_suffix}"
+            name_and_rating = f"{display_name} ({rating_str})"
         else:
-            line = f"{display_name} — {final_pos}{time_suffix}"
+            name_and_rating = f"{display_name}"
+
+        marker_display = f" — ({marker_tag})" if marker_tag else ""
+
+        if rating_str:
+            line = f"{name_and_rating}{marker_display} — {final_pos}{time_suffix}"
+        else:
+            line = f"{name_and_rating}{marker_display} — {final_pos}{time_suffix}"
 
         category_groups.setdefault(category, []).append(line)
 
@@ -561,6 +631,9 @@ def post_event_position_posting():
             "mention_text": mention_text_preview,
             "mention_user_ids": mention_uids_preview,
             "ping_users": ping_users,
+            "enable_buffer_times": enable_buffer_times,
+            "buffer_start": buffer_start.isoformat() if buffer_start is not None else None,
+            "buffer_end": buffer_end.isoformat() if buffer_end is not None else None,
             "update_count": new_update_count_preview,
             "last_updated": last_updated_preview,
         }

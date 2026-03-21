@@ -29,6 +29,7 @@ exceptions for non-fatal problems.
 from flask import Blueprint, request, jsonify
 import discord
 from datetime import datetime, timezone, timedelta
+import asyncio
 from typing import Dict, Any
 
 from extensions.api_server import app, api_key_required
@@ -231,7 +232,7 @@ def post_event_position_posting():
     raw_ping = _safe_get(data, "ping_users", True)
     ping_users = _normalize_bool(raw_ping, default=True)
 
-    # New: whether event buffering (±1 hour) is enabled for this event. Default False.
+    # New: whether event buffering (±2 hours) is enabled for this event. Default False.
     raw_enable_buffer = _safe_get(data, "enable_buffer_times", False)
     enable_buffer_times = _normalize_bool(raw_enable_buffer, default=False)
 
@@ -274,8 +275,8 @@ def post_event_position_posting():
     buffer_end = None
     try:
         if enable_buffer_times and isinstance(sdt, datetime) and isinstance(edt, datetime):
-            buffer_start = sdt - timedelta(hours=1)
-            buffer_end = edt + timedelta(hours=1)
+            buffer_start = sdt - timedelta(hours=2)
+            buffer_end = edt + timedelta(hours=2)
             logger.debug("Computed buffer bounds for event", extra={"buffer_start": buffer_start.isoformat(), "buffer_end": buffer_end.isoformat()})
     except Exception:
         buffer_start = None
@@ -321,7 +322,7 @@ def post_event_position_posting():
     # If buffering enabled, add a short note to the embed so viewers know positions may include buffer time
     try:
         if enable_buffer_times and buffer_start is not None and buffer_end is not None:
-            embed.add_field(name="Buffering", value="Buffered times enabled — some positions may extend ±1 hour around event start/end.", inline=False)
+            embed.add_field(name="Buffering", value="Buffered times enabled — some positions may extend ±2 hours around event start/end.", inline=False)
     except Exception:
         logger.debug("Failed to add buffering field to embed", exc_info=True)
 
@@ -746,7 +747,18 @@ def post_event_position_posting():
                     # Send a fresh mention message (outside embed) so Discord will ping users anew
                     if mention_text:
                         sent_m = await ch.send(content=mention_text)
-                        return getattr(sent_m, "id", None)
+                        sent_id = getattr(sent_m, "id", None)
+                        # Attempt to delete the mention message shortly after sending so pings
+                        # still notify users but the channel doesn't keep the ping message.
+                        try:
+                            # small delay to ensure Discord processes notifications
+                            await asyncio.sleep(1)
+                            await sent_m.delete()
+                            # indicate we deleted the mention by returning None
+                            return None
+                        except Exception:
+                            # If deletion failed, return the id so callers can still reference it
+                            return sent_id
                     return None
                 except Exception:
                     return None

@@ -232,7 +232,7 @@ def post_event_position_posting():
     raw_ping = _safe_get(data, "ping_users", True)
     ping_users = _normalize_bool(raw_ping, default=True)
 
-    # New: whether event buffering (±2 hour) is enabled for this event. Default False.
+    # New: whether event buffering (±2 hours) is enabled for this event. Default False.
     raw_enable_buffer = _safe_get(data, "enable_buffer_times", False)
     enable_buffer_times = _normalize_bool(raw_enable_buffer, default=False)
 

@@ -45,7 +45,7 @@ def parse_position(position_str: str) -> str:
 
     # Check last three letters (e.g. CTR, APP, TWR, etc.).
     last3 = "".join(letters[-3:])
-    valid = {"CTR", "APP", "TWR", "GND", "RMP", "DEL", "CIC", "TMU"}
+    valid = {"CTR", "APP", "TWR", "GND", "RMP", "DEL", "CIC", "TMU", "DEP"}
     if last3 in valid:
         return last3
 

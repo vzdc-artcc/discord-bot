@@ -322,7 +322,7 @@ def post_event_position_posting():
     # If buffering enabled, add a short note to the embed so viewers know positions may include buffer time
     try:
         if enable_buffer_times and buffer_start is not None and buffer_end is not None:
-            embed.add_field(name="Buffering", value="Buffered times enabled — some positions may extend ±2 hour around event start/end.", inline=False)
+            embed.add_field(name="Buffering", value="Buffered times enabled — some positions may extend ±2 hours around event start/end.", inline=False)
     except Exception:
         logger.debug("Failed to add buffering field to embed", exc_info=True)
 

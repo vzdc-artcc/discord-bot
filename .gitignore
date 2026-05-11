@@ -207,3 +207,8 @@ __marimo__/
 /data/notification_message_id_1441276520927596587.json
 /data/impromptu_selector_message_id_1441276520927596587.json
 /tools/
+/.DS_Store
+/__pycache__/
+/.env
+.idea
+/logs/

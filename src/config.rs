@@ -19,6 +19,9 @@ pub struct Config {
     pub audit_include_bot_events: bool,
     pub audit_fetch_audit_logs: bool,
     pub audit_max_field_chars: usize,
+    pub role_sync_on_join: bool,
+    pub role_sync_periodic_enabled: bool,
+    pub role_sync_interval_mins: u64,
     pub staffup_enabled: bool,
     pub staffup_poll_interval_secs: u64,
     pub staffup_batch_size: u64,
@@ -52,6 +55,9 @@ impl Config {
             audit_include_bot_events: parse_bool("AUDIT_INCLUDE_BOT_EVENTS", false),
             audit_fetch_audit_logs: parse_bool("AUDIT_FETCH_AUDIT_LOGS", true),
             audit_max_field_chars: parse_usize_with_default("AUDIT_MAX_FIELD_CHARS", 900)?,
+            role_sync_on_join: parse_bool("ROLE_SYNC_ON_JOIN", true),
+            role_sync_periodic_enabled: parse_bool("ROLE_SYNC_PERIODIC_ENABLED", false),
+            role_sync_interval_mins: parse_u64_with_default("ROLE_SYNC_INTERVAL_MINS", 60)?,
             staffup_enabled: parse_bool("STAFFUP_ENABLED", true),
             staffup_poll_interval_secs: parse_u64_with_default("STAFFUP_POLL_INTERVAL_SECS", 10)?,
             staffup_batch_size: parse_u64_with_default("STAFFUP_BATCH_SIZE", 100)?,
@@ -168,5 +174,9 @@ mod tests {
             100
         );
         assert!(parse_bool("STAFFUP_ENABLED_DOES_NOT_EXIST", true));
+        assert_eq!(
+            parse_u64_with_default("ROLE_SYNC_INTERVAL_MINS_DOES_NOT_EXIST", 60).unwrap(),
+            60
+        );
     }
 }

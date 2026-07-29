@@ -14,7 +14,7 @@ pub enum AppError {
     #[error("http client error: {0}")]
     Http(#[from] reqwest::Error),
     #[error("discord api error: {0}")]
-    Serenity(#[from] serenity::Error),
+    Serenity(#[from] Box<serenity::Error>),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("task join error: {0}")]
@@ -27,6 +27,12 @@ pub enum AppError {
     Unauthorized,
     #[error("bad request: {0}")]
     BadRequest(String),
+}
+
+impl From<serenity::Error> for AppError {
+    fn from(error: serenity::Error) -> Self {
+        Self::Serenity(Box::new(error))
+    }
 }
 
 impl IntoResponse for AppError {

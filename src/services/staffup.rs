@@ -75,7 +75,11 @@ pub async fn start_staffup_worker(state: AppState) {
 }
 
 async fn process_staffup_cycle(state: &AppState) -> AppResult<bool> {
-    {
+    // When the staffup feature is disabled we still drain the controller-event
+    // backlog below (advancing the cursor without posting) so re-enabling later
+    // doesn't replay a burst of stale online/offline transitions.
+    let enabled = state.runtime.feature_enabled("staffup").await;
+    if enabled {
         let bundle = current_bundle(state).await?;
         let channel_ready = bundle.resolve_staffup_targets().is_ok();
         let mut readiness = state.runtime.readiness.write().await;
@@ -116,7 +120,9 @@ async fn process_staffup_cycle(state: &AppState) -> AppResult<bool> {
     let mut cursor = state.runtime.staffup_cursor.read().await.clone();
 
     for event in &response.events {
-        process_event(state, &bundle, &mut cursor, event).await?;
+        if enabled {
+            process_event(state, &bundle, &mut cursor, event).await?;
+        }
         cursor.last_event_id = event.id;
     }
 
@@ -641,6 +647,9 @@ mod tests {
                 audit_include_bot_events: false,
                 audit_fetch_audit_logs: true,
                 audit_max_field_chars: 900,
+                role_sync_on_join: true,
+                role_sync_periodic_enabled: false,
+                role_sync_interval_mins: 60,
                 staffup_enabled: true,
                 staffup_poll_interval_secs: 10,
                 staffup_batch_size: 100,
@@ -657,6 +666,7 @@ mod tests {
             },
             osmium: crate::osmium::OsmiumClient::new("http://127.0.0.1:3000".into(), "x").unwrap(),
             runtime: std::sync::Arc::new(crate::state::RuntimeState::new()),
+            discord_http: std::sync::Arc::new(serenity::http::Http::new("token")),
             delivery: std::sync::Arc::new(crate::services::SerenityDiscordService::new(
                 std::sync::Arc::new(serenity::http::Http::new("token")),
                 "https://example.com/logo.png".into(),

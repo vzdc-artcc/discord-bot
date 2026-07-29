@@ -1,4 +1,3 @@
-<<<<<<< ours
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
@@ -16,9 +15,3 @@ async fn main() {
         std::process::exit(1);
     }
 }
-|||||||
-=======
-fn main() {
-    println!("Hello, world!");
-}
->>>>>>> theirs

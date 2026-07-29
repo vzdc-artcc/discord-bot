@@ -122,12 +122,15 @@ impl DiscordConfigBundle {
         })
     }
 
-    pub fn resolve_announcement_targets(&self) -> AppResult<Vec<ResolvedChannelTarget>> {
-        let targets = self.resolve_named_channels("announcements")?;
+    pub fn resolve_announcement_targets(
+        &self,
+        channel: &str,
+    ) -> AppResult<Vec<ResolvedChannelTarget>> {
+        let targets = self.resolve_named_channels(channel)?;
         if targets.is_empty() {
-            return Err(AppError::Config(
-                "osmium discord config bundle does not define an `announcements` channel".into(),
-            ));
+            return Err(AppError::Config(format!(
+                "osmium discord config bundle does not define a `{channel}` channel"
+            )));
         }
         Ok(targets)
     }
@@ -262,4 +265,26 @@ fn parse_u64(value: &str, field: &str) -> AppResult<u64> {
     value
         .parse::<u64>()
         .map_err(|_| AppError::Config(format!("invalid {field} `{value}` in osmium config")))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BotFeatureFlag {
+    pub key: String,
+    #[serde(default)]
+    pub label: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BotFeatureFlagsResponse {
+    pub features: Vec<BotFeatureFlag>,
+}
+
+impl BotFeatureFlagsResponse {
+    pub fn into_map(self) -> std::collections::HashMap<String, bool> {
+        self.features
+            .into_iter()
+            .map(|flag| (flag.key, flag.enabled))
+            .collect()
+    }
 }

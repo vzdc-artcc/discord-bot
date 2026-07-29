@@ -11,11 +11,11 @@
 
 ## Next
 
-- [ ] Tighten Discord message formatting for production presentation and mention policies
-- [ ] Add richer command option validation and operator feedback
-- [ ] Add contract fixtures for Osmium callback payloads and API responses
-- [ ] Add CI workflow checks for `fmt`, `clippy`, and `test`
-- [ ] Add deployment manifests and environment-specific config examples
+- [x] Tighten Discord message formatting for production presentation and mention policies
+- [x] Add richer command option validation and operator feedback
+- [x] Add contract fixtures for Osmium callback payloads and API responses
+- [x] Add CI workflow checks for `fmt`, `clippy`, and `test`
+- [x] Add deployment manifests and environment-specific config examples
 
 ## Later
 
@@ -28,3 +28,7 @@
 
 - [x] Establish the separate-service, API-first runtime architecture
 - [x] Document the bot/Osmium ownership boundary and callback contracts
+
+
+## Notes
+When doing discord oauth within the website/osmium, once the link is created, have the bot send them a DM if possible.

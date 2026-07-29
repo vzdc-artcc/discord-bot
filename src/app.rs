@@ -11,7 +11,7 @@ use crate::{
     services::{
         SerenityDiscordService, ensure_break_board_messages, ensure_impromptu_selector_message,
         load_break_board_requests_into_runtime, start_break_board_cleanup_worker,
-        start_staffup_worker,
+        start_role_sync_worker, start_staffup_worker,
     },
     state::{AppState, RuntimeState},
 };
@@ -40,6 +40,7 @@ pub async fn run() -> AppResult<()> {
         config: config.clone(),
         osmium,
         runtime,
+        discord_http: http_client.clone(),
         delivery,
     };
 
@@ -47,11 +48,25 @@ pub async fn run() -> AppResult<()> {
     tracing::info!(id = %session.id, key = %session.key, "verified osmium service account");
 
     sync_config(&state).await?;
-    ensure_impromptu_selector_message(&state).await?;
-    ensure_break_board_messages(&state).await?;
+    // These interactive-message bootstraps depend on the osmium Discord config
+    // (impromptu_training / break_board channels + roles). The bot must still boot
+    // when that config is absent or incomplete so operators can configure it live
+    // via the website using the guild-discovery endpoints; treat failures as
+    // non-fatal warnings, matching how the staffup/audit workers degrade.
+    if let Err(error) = ensure_impromptu_selector_message(&state).await {
+        tracing::warn!(
+            ?error,
+            "skipping impromptu selector bootstrap; config incomplete"
+        );
+    }
+    if let Err(error) = ensure_break_board_messages(&state).await {
+        tracing::warn!(?error, "skipping break board bootstrap; config incomplete");
+    }
     load_break_board_requests_into_runtime(&state).await?;
     start_break_board_cleanup_worker(state.clone()).await;
     start_staffup_worker(state.clone()).await;
+    start_role_sync_worker(state.clone()).await;
+    start_config_sync_worker(state.clone());
 
     if !state.config.command_guild_ids.is_empty() {
         let count = state
@@ -117,6 +132,17 @@ pub async fn sync_config(state: &AppState) -> AppResult<()> {
         *guard = Some(bundle.clone());
     }
 
+    // Pull runtime feature toggles alongside the config. Non-fatal: keep the last
+    // known flags if osmium hiccups, so a transient failure doesn't flip features.
+    match state.osmium.fetch_bot_feature_flags().await {
+        Ok(flags) => {
+            *state.runtime.feature_flags.write().await = flags.into_map();
+        }
+        Err(error) => {
+            tracing::warn!(?error, "failed syncing bot feature flags; keeping previous");
+        }
+    }
+
     let mut readiness = state.runtime.readiness.write().await;
     readiness.config_loaded = true;
     readiness.last_config_error = None;
@@ -146,4 +172,45 @@ pub async fn sync_config(state: &AppState) -> AppResult<()> {
     );
 
     Ok(())
+}
+
+/// Periodically re-pull the Discord config bundle from osmium so channel/role
+/// changes made in the website take effect on the running bot without a restart.
+///
+/// The config is otherwise only loaded once at startup; gateway shard reconnects
+/// do NOT re-run startup, so without this a newly-added channel (e.g.
+/// `event_position_posting`) never reaches the running process.
+fn start_config_sync_worker(state: AppState) {
+    let interval_secs = std::env::var("CONFIG_SYNC_INTERVAL_SECS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(60);
+
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        // The startup call in `run()` already synced once; skip the immediate tick.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            match sync_config(&state).await {
+                Ok(()) => {
+                    // Interactive-message bootstraps only run at startup; re-run them
+                    // (idempotent — they no-op if the message already exists) so a
+                    // channel/role added after boot brings the feature online too.
+                    if let Err(error) = ensure_impromptu_selector_message(&state).await {
+                        tracing::debug!(?error, "impromptu selector not ready after resync");
+                    }
+                    if let Err(error) = ensure_break_board_messages(&state).await {
+                        tracing::debug!(?error, "break board not ready after resync");
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(?error, "periodic config sync failed");
+                    let mut readiness = state.runtime.readiness.write().await;
+                    readiness.last_config_error = Some(error.to_string());
+                }
+            }
+        }
+    });
 }

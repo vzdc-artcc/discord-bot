@@ -5,8 +5,8 @@ use reqwest::StatusCode;
 use serenity::{
     Error as SerenityError,
     all::{
-        ButtonStyle, ChannelId, CreateActionRow, CreateButton, CreateEmbed, CreateEmbedFooter,
-        CreateMessage, EditMessage, GuildId, Http, MessageId, RoleId,
+        ButtonStyle, ChannelId, CreateActionRow, CreateAllowedMentions, CreateButton, CreateEmbed,
+        CreateEmbedFooter, CreateMessage, EditMessage, GuildId, Http, MessageId, RoleId,
     },
     builder::{CreateInteractionResponseMessage, EditInteractionResponse},
     model::Timestamp,
@@ -165,54 +165,75 @@ impl SerenityDiscordService {
 
     pub fn preview_event_embed(
         &self,
-        payload: &EventPositionPostingPayload,
+        _payload: &EventPositionPostingPayload,
         event: &Event,
         positions: &[EventPosition],
     ) -> CreateEmbed {
-        let assigned = positions
-            .iter()
-            .filter(|position| position.user_id.is_some())
-            .count();
-        let positions_body = if positions.is_empty() {
-            "No positions are currently published.".to_string()
-        } else {
-            positions
-                .iter()
-                .map(|position| {
-                    let slot = position
-                        .assigned_slot
-                        .map(|slot| format!(" slot {slot}"))
-                        .unwrap_or_default();
-                    let assigned = if position.user_id.is_some() {
-                        "assigned"
-                    } else {
-                        "open"
-                    };
-                    format!("`{}` - {assigned}{slot}", position.callsign)
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
+        let mut embed = CreateEmbed::new()
+            .color(0x2E86DE)
+            .title(event.title.clone());
 
-        self.apply_standard_footer(
-            CreateEmbed::new()
-                .title(format!("Event Positions Published: {}", event.title))
-                .description(
-                    event
-                        .description
-                        .clone()
-                        .unwrap_or_else(|| "No event description provided.".to_string()),
-                )
-                .field("Event ID", event.id.clone(), true)
-                .field(
-                    "Window",
-                    format!("{} to {}", event.starts_at, event.ends_at),
-                    false,
-                )
-                .field("Assigned", assigned.to_string(), true)
-                .field("Ping Users", payload.ping_users.to_string(), true)
-                .field("Positions", positions_body, false),
-        )
+        // Link back to the event signup page at the top: make the title clickable
+        // and lead the description with a prominent link.
+        let signup_url = event_signup_url(event);
+        if let Some(url) = &signup_url {
+            embed = embed.url(url.clone());
+        }
+
+        // Discord caps an embed at 6000 chars across title+description+fields+
+        // footer; keep a running budget so a long description plus many position
+        // groups can't blow past it and get the whole message rejected.
+        let mut budget = 6000usize.saturating_sub(event.title.chars().count() + 64);
+
+        let mut description_parts = Vec::new();
+        if let Some(url) = &signup_url {
+            description_parts.push(format!("**[📋 Sign up / view event »]({url})**"));
+        }
+        if let Some(description) = event
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            description_parts.push(description.to_string());
+        }
+        if !description_parts.is_empty() {
+            let value = truncate_chars(&description_parts.join("\n\n"), budget.min(4000));
+            budget = budget.saturating_sub(value.chars().count());
+            embed = embed.description(value);
+        }
+
+        // Discord timestamps render in each viewer's local timezone.
+        embed = embed
+            .field(
+                "Start",
+                format!("<t:{}:F>", event.starts_at.timestamp()),
+                true,
+            )
+            .field("End", format!("<t:{}:F>", event.ends_at.timestamp()), true);
+        budget = budget.saturating_sub(48);
+
+        let groups = group_positions_by_category(positions);
+        if groups.is_empty() {
+            embed = embed.field("Positions", "No positions are currently published.", false);
+        } else {
+            for (label, lines) in groups {
+                let name = format!("{label} ({})", lines.len());
+                let name_cost = name.chars().count();
+                if budget <= name_cost + 8 {
+                    break;
+                }
+                let value = truncate_chars(&lines.join("\n"), 1024.min(budget - name_cost));
+                budget = budget.saturating_sub(name_cost + value.chars().count());
+                embed = embed.field(name, value, false);
+            }
+        }
+
+        if let Some(url) = event_banner_url(event) {
+            embed = embed.image(url);
+        }
+
+        self.apply_standard_footer(embed)
     }
 
     pub fn staffup_online_embed(&self, payload: &StaffupOnlineEmbed) -> CreateEmbed {
@@ -421,8 +442,15 @@ impl DiscordDelivery for SerenityDiscordService {
         bundle: &DiscordConfigBundle,
         payload: &AnnouncementPayload,
     ) -> AppResult<usize> {
-        let targets = bundle.resolve_announcement_targets()?;
+        let channel = payload
+            .channel
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("announcements");
+        let targets = bundle.resolve_announcement_targets(channel)?;
         tracing::info!(
+            channel,
             target_count = targets.len(),
             requested_by_cid = payload.requested_by_cid,
             "sending announcement embed to discord targets"
@@ -447,7 +475,12 @@ impl DiscordDelivery for SerenityDiscordService {
             "sending event position posting embed to discord targets"
         );
         let embed = self.preview_event_embed(payload, event, positions);
-        send_embed_to_targets(&self.http, &targets, embed).await
+        let ping_ids = if payload.ping_users {
+            event_ping_mentions(positions)
+        } else {
+            Vec::new()
+        };
+        send_event_posting_to_targets(&self.http, &event.id, &targets, embed, &ping_ids).await
     }
 
     async fn register_commands(&self, guild_ids: &[GuildId]) -> AppResult<usize> {
@@ -658,7 +691,8 @@ impl DiscordDelivery for SerenityDiscordService {
                 &self.http,
                 CreateMessage::new()
                     .embed(self.impromptu_selector_embed())
-                    .components(self.impromptu_selector_components(roles)),
+                    .components(self.impromptu_selector_components(roles))
+                    .allowed_mentions(suppress_mentions()),
             )
             .await
             .map_err(|error| {
@@ -737,7 +771,8 @@ impl DiscordDelivery for SerenityDiscordService {
                 &self.http,
                 CreateMessage::new()
                     .embed(self.break_board_preferences_embed())
-                    .components(self.break_board_preference_components(roles)),
+                    .components(self.break_board_preference_components(roles))
+                    .allowed_mentions(suppress_mentions()),
             )
             .await
             .map_err(|error| {
@@ -752,7 +787,8 @@ impl DiscordDelivery for SerenityDiscordService {
                 &self.http,
                 CreateMessage::new()
                     .embed(self.break_board_request_embed())
-                    .components(self.break_board_request_components(roles)),
+                    .components(self.break_board_request_components(roles))
+                    .allowed_mentions(suppress_mentions()),
             )
             .await
             .map_err(|error| {
@@ -833,7 +869,8 @@ impl DiscordDelivery for SerenityDiscordService {
                 CreateMessage::new()
                     .content(format!("<@&{}>", request.role_id))
                     .embed(self.break_board_request_post_embed(request))
-                    .components(Vec::new()),
+                    .components(Vec::new())
+                    .allowed_mentions(allow_role_mention(request.role_id)),
             )
             .await
             .map_err(|error| {
@@ -905,13 +942,18 @@ impl DiscordDelivery for SerenityDiscordService {
             "creating break board claim message"
         );
         let claimer = request.claimed_by_mention.as_deref().unwrap_or("Unknown");
+        let mut ping_user_ids = vec![request.requester_user_id];
+        if let Some(claimer_id) = request.claimed_by_user_id {
+            ping_user_ids.push(claimer_id);
+        }
         let message = ChannelId::new(request.channel_id)
             .send_message(
                 &self.http,
                 CreateMessage::new()
                     .content(format!("{} {}", request.requester_mention, claimer))
                     .embed(self.break_board_claim_embed(request))
-                    .components(self.break_board_claim_components(request.request_message_id)),
+                    .components(self.break_board_claim_components(request.request_message_id))
+                    .allowed_mentions(allow_user_mentions(&ping_user_ids)),
             )
             .await
             .map_err(|error| {
@@ -950,6 +992,370 @@ impl DiscordDelivery for SerenityDiscordService {
     }
 }
 
+fn suppress_mentions() -> CreateAllowedMentions {
+    CreateAllowedMentions::new()
+        .empty_roles()
+        .empty_users()
+        .all_users(false)
+        .all_roles(false)
+        .everyone(false)
+}
+
+fn allow_role_mention(role_id: u64) -> CreateAllowedMentions {
+    CreateAllowedMentions::new()
+        .roles([RoleId::new(role_id)])
+        .empty_users()
+        .all_users(false)
+        .all_roles(false)
+        .everyone(false)
+}
+
+fn allow_user_mentions(user_ids: &[u64]) -> CreateAllowedMentions {
+    // `CreateAllowedMentions::users` replaces the list, so set every id in one
+    // call; adding them one-by-one in a loop would keep only the last user.
+    CreateAllowedMentions::new()
+        .empty_roles()
+        .users(user_ids.iter().map(|&id| serenity::all::UserId::new(id)))
+        .all_users(false)
+        .all_roles(false)
+        .everyone(false)
+}
+
+/// Public base URL (reachable by Discord's servers) that serves osmium event
+/// banners at `/cdn/{asset_id}`. Unset in local dev (localhost is unreachable by
+/// Discord), so the banner is simply omitted there.
+pub(crate) fn event_banner_url(event: &Event) -> Option<String> {
+    let base = std::env::var("EVENT_BANNER_BASE_URL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())?;
+    let asset = event
+        .banner_asset_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(format!("{}/cdn/{}", base.trim_end_matches('/'), asset))
+}
+
+/// Public website base URL (e.g. `https://vzdc.org`) used to link an event
+/// posting back to its signup page at `/events/{id}`. Omitted when unset.
+fn event_signup_url(event: &Event) -> Option<String> {
+    let base = std::env::var("EVENT_SIGNUP_BASE_URL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())?;
+    Some(format!(
+        "{}/events/{}",
+        base.trim_end_matches('/'),
+        event.id
+    ))
+}
+
+/// A message the bot posted for an event, so a re-post can delete the old one.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct PostedEventMessage {
+    channel_id: u64,
+    message_id: u64,
+}
+
+type EventPostings = std::collections::HashMap<String, Vec<PostedEventMessage>>;
+
+/// Serializes the read-modify-write of the event-posting state file so two
+/// concurrent postings can't clobber each other's tracked messages.
+static EVENT_POSTING_STATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn event_posting_state_path() -> std::path::PathBuf {
+    std::env::var("EVENT_POSTING_STATE_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("data/event_postings.json"))
+}
+
+async fn load_event_postings(path: &std::path::Path) -> EventPostings {
+    match tokio::fs::read(path).await {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+        Err(_) => EventPostings::default(),
+    }
+}
+
+async fn save_event_postings(path: &std::path::Path, postings: &EventPostings) -> AppResult<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let tmp_path = path.with_extension("json.tmp");
+    tokio::fs::write(&tmp_path, serde_json::to_vec_pretty(postings)?).await?;
+    tokio::fs::rename(&tmp_path, path).await?;
+    Ok(())
+}
+
+/// Group published positions by facility category (GND/TWR/APP/CTR/…), ordered
+/// low-to-high, with each entry rendered as `mention (rating) — callsign`.
+fn group_positions_by_category(positions: &[EventPosition]) -> Vec<(String, Vec<String>)> {
+    use std::collections::BTreeMap;
+
+    let mut groups: BTreeMap<String, Vec<&EventPosition>> = BTreeMap::new();
+    for position in positions.iter().filter(|position| position.published) {
+        groups
+            .entry(position_category(position))
+            .or_default()
+            .push(position);
+    }
+
+    let mut ordered: Vec<(String, Vec<&EventPosition>)> = groups.into_iter().collect();
+    ordered.sort_by(|(a, _), (b, _)| {
+        category_rank(a)
+            .cmp(&category_rank(b))
+            .then_with(|| a.cmp(b))
+    });
+
+    ordered
+        .into_iter()
+        .map(|(label, mut items)| {
+            items.sort_by(|a, b| position_callsign(a).cmp(position_callsign(b)));
+            let lines = items
+                .iter()
+                .map(|item| format_position_line(item))
+                .collect();
+            (label, lines)
+        })
+        .collect()
+}
+
+fn position_callsign(position: &EventPosition) -> &str {
+    position
+        .final_position
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(position.callsign.as_str())
+}
+
+fn position_category(position: &EventPosition) -> String {
+    // Prefer the callsign suffix (e.g. `HEF_GND` -> `GND`); it maps cleanly to a
+    // facility group. `controlling_category` is a broad bucket (LOCAL/TERMINAL/
+    // ENROUTE), only useful as a fallback for sector-named positions like `FLTRK`.
+    let suffix = position_callsign(position)
+        .rsplit('_')
+        .next()
+        .unwrap_or_default()
+        .to_uppercase();
+    match suffix.as_str() {
+        "DEL" => return "DEL".to_string(),
+        "GND" => return "GND".to_string(),
+        "TWR" => return "TWR".to_string(),
+        "APP" | "DEP" => return "APP".to_string(),
+        "CTR" | "FSS" => return "CTR".to_string(),
+        "TMU" => return "TMU".to_string(),
+        _ => {}
+    }
+
+    match position
+        .controlling_category
+        .as_deref()
+        .map(|value| value.trim().to_uppercase())
+        .as_deref()
+    {
+        Some("LOCAL" | "TWR" | "TOWER") => "TWR",
+        Some("TERMINAL" | "APP" | "APPROACH") => "APP",
+        Some("ENROUTE" | "CTR" | "CENTER") => "CTR",
+        Some("GND" | "GROUND") => "GND",
+        Some("DEL" | "DELIVERY") => "DEL",
+        _ => "OTHER",
+    }
+    .to_string()
+}
+
+fn category_rank(label: &str) -> usize {
+    match label {
+        "DEL" => 0,
+        "GND" => 1,
+        "TWR" => 2,
+        "APP" => 3,
+        "CTR" => 4,
+        "TMU" => 5,
+        "OTHER" => 8,
+        _ => 7,
+    }
+}
+
+fn format_position_line(position: &EventPosition) -> String {
+    let who = if let Some(id) = position
+        .user_discord_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        format!("<@{id}>")
+    } else if let Some(name) = position
+        .user_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        name.to_string()
+    } else {
+        "*Open*".to_string()
+    };
+
+    let rating = position
+        .user_rating
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!(" ({value})"))
+        .unwrap_or_default();
+
+    format!("{who}{rating} — {}", position_callsign(position))
+}
+
+/// Truncate to at most `max` characters, appending an ellipsis when clipped.
+pub(crate) fn truncate_chars(value: &str, max: usize) -> String {
+    if value.chars().count() <= max {
+        return value.to_string();
+    }
+    let mut out: String = value.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+/// Collect unique linked-controller mentions for an event roster, for pinging.
+fn event_ping_mentions(positions: &[EventPosition]) -> Vec<u64> {
+    let mut seen = std::collections::HashSet::new();
+    let mut ids = Vec::new();
+    for position in positions.iter().filter(|position| position.published) {
+        if let Some(id) = position
+            .user_discord_id
+            .as_deref()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            && seen.insert(id)
+        {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+async fn send_event_posting_to_targets(
+    http: &Arc<Http>,
+    event_id: &str,
+    targets: &[crate::models::ResolvedChannelTarget],
+    embed: CreateEmbed,
+    ping_ids: &[u64],
+) -> AppResult<usize> {
+    // Track the message we post per event+channel so a re-post replaces the old
+    // one instead of stacking duplicates. Hold the lock across the whole
+    // load-modify-write so concurrent postings don't clobber each other.
+    let _state_guard = EVENT_POSTING_STATE_LOCK.lock().await;
+    let state_path = event_posting_state_path();
+    let mut postings = load_event_postings(&state_path).await;
+    let previous = postings.remove(event_id).unwrap_or_default();
+    let mut current: Vec<PostedEventMessage> = Vec::new();
+
+    // Delete every previously-tracked posting for this event first (covers the
+    // case where the posting channel was reconfigured between posts).
+    for old in &previous {
+        if let Err(error) = ChannelId::new(old.channel_id)
+            .delete_message(http, MessageId::new(old.message_id))
+            .await
+        {
+            tracing::warn!(
+                ?error,
+                channel_id = old.channel_id,
+                message_id = old.message_id,
+                "failed deleting previous event posting (already gone?)"
+            );
+        }
+    }
+
+    let mut delivered = 0usize;
+    for target in targets {
+        let channel = ChannelId::new(target.channel_id);
+
+        // The posting itself is embed-only; user mentions render as name pills in
+        // the embed but never notify, so the channel stays clean.
+        let posted = match channel
+            .send_message(
+                http,
+                CreateMessage::new()
+                    .embed(embed.clone())
+                    .allowed_mentions(suppress_mentions()),
+            )
+            .await
+        {
+            Ok(posted) => posted,
+            Err(error) => {
+                // Persist whatever we already posted so a later repost can delete
+                // it instead of leaving orphaned duplicates behind.
+                if !current.is_empty() {
+                    postings.insert(event_id.to_string(), current);
+                }
+                if let Err(save_error) = save_event_postings(&state_path, &postings).await {
+                    tracing::warn!(
+                        ?save_error,
+                        "failed persisting event posting state after send failure"
+                    );
+                }
+                return Err(AppError::Discord(format!(
+                    "failed posting to config `{}` channel {}: {error}",
+                    target.config_name, target.channel_id
+                )));
+            }
+        };
+        current.push(PostedEventMessage {
+            channel_id: target.channel_id,
+            message_id: posted.id.get(),
+        });
+        delivered += 1;
+
+        // Notify assigned controllers with a separate mention-only message, then
+        // delete it immediately (a "ghost ping"): the notification fires, but the
+        // posting embed is the only thing left in the channel.
+        if !ping_ids.is_empty() {
+            let content = ping_ids
+                .iter()
+                .map(|id| format!("<@{id}>"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            match channel
+                .send_message(
+                    http,
+                    CreateMessage::new()
+                        .content(content)
+                        .allowed_mentions(allow_user_mentions(ping_ids)),
+                )
+                .await
+            {
+                Ok(ping_message) => {
+                    if let Err(error) = channel.delete_message(http, ping_message.id).await {
+                        tracing::warn!(
+                            ?error,
+                            channel_id = target.channel_id,
+                            "failed deleting event ping message"
+                        );
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    ?error,
+                    channel_id = target.channel_id,
+                    "failed sending event ping message"
+                ),
+            }
+        }
+    }
+
+    if !current.is_empty() {
+        postings.insert(event_id.to_string(), current);
+    }
+    if let Err(error) = save_event_postings(&state_path, &postings).await {
+        tracing::warn!(?error, "failed persisting event posting message state");
+    }
+
+    tracing::info!(delivered, "event position posting delivery completed");
+    Ok(delivered)
+}
+
 async fn send_embed_to_targets(
     http: &Arc<Http>,
     targets: &[crate::models::ResolvedChannelTarget],
@@ -965,7 +1371,12 @@ async fn send_embed_to_targets(
             "sending embed to discord target"
         );
         ChannelId::new(target.channel_id)
-            .send_message(http, CreateMessage::new().embed(embed.clone()))
+            .send_message(
+                http,
+                CreateMessage::new()
+                    .embed(embed.clone())
+                    .allowed_mentions(suppress_mentions()),
+            )
             .await
             .map_err(|error| {
                 AppError::Discord(format!(
@@ -1146,7 +1557,7 @@ mod tests {
     use serenity::http::Http;
 
     use crate::models::{
-        AnnouncementPayload, Event, EventPositionPostingPayload, ResolvedRoleTarget,
+        AnnouncementPayload, Event, EventPosition, EventPositionPostingPayload, ResolvedRoleTarget,
         StaffupOfflineEmbed, StaffupOnlineEmbed,
     };
 
@@ -1169,6 +1580,7 @@ mod tests {
             body_markdown: "Body".into(),
             details_url: None,
             requested_by_cid: 1234567,
+            channel: None,
         });
         let json = serde_json::to_value(embed).unwrap();
         assert_eq!(json["footer"]["text"], "vZDC");
@@ -1192,6 +1604,7 @@ mod tests {
                 description: Some("Desc".into()),
                 status: "published".into(),
                 published: true,
+                banner_asset_id: None,
                 starts_at: chrono::Utc.with_ymd_and_hms(2026, 5, 10, 20, 0, 0).unwrap(),
                 ends_at: chrono::Utc.with_ymd_and_hms(2026, 5, 10, 22, 0, 0).unwrap(),
                 created_by: "user".into(),
@@ -1204,6 +1617,67 @@ mod tests {
         assert_eq!(json["footer"]["text"], "vZDC");
         assert_eq!(json["footer"]["icon_url"], "https://example.com/logo.png");
         assert!(json.get("timestamp").is_some());
+    }
+
+    fn position(
+        callsign: &str,
+        category: Option<&str>,
+        name: Option<&str>,
+        rating: Option<&str>,
+        discord: Option<&str>,
+    ) -> EventPosition {
+        EventPosition {
+            id: callsign.into(),
+            event_id: "e".into(),
+            callsign: callsign.into(),
+            user_id: name.map(|_| "u".into()),
+            user_cid: None,
+            user_name: name.map(Into::into),
+            user_rating: rating.map(Into::into),
+            user_discord_id: discord.map(Into::into),
+            controlling_category: category.map(Into::into),
+            requested_slot: None,
+            assigned_slot: None,
+            final_position: None,
+            published: true,
+            status: "published".into(),
+            created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 10, 18, 0, 0).unwrap(),
+            updated_at: chrono::Utc.with_ymd_and_hms(2026, 5, 10, 18, 0, 0).unwrap(),
+        }
+    }
+
+    #[test]
+    fn groups_positions_by_category_in_order_with_mentions_and_ratings() {
+        let positions = vec![
+            position("DC_12_CTR", Some("CTR"), Some("Matthew"), Some("C1"), None),
+            position("HEF_GND", Some("GND"), None, Some("S3"), Some("111")),
+            position("DCA_TWR", None, Some("Aaron"), Some("C3"), Some("222")),
+            position("FLTRK", Some("APP"), None, None, None),
+        ];
+
+        let groups = super::group_positions_by_category(&positions);
+        let labels: Vec<&str> = groups.iter().map(|(label, _)| label.as_str()).collect();
+        // GND < TWR (from callsign suffix) < APP < CTR
+        assert_eq!(labels, vec!["GND", "TWR", "APP", "CTR"]);
+
+        // GND: linked discord id -> mention, with rating.
+        assert_eq!(groups[0].1[0], "<@111> (S3) — HEF_GND");
+        // TWR: category inferred from `DCA_TWR` suffix; name fallback + rating.
+        assert_eq!(groups[1].0, "TWR");
+        assert_eq!(groups[1].1[0], "<@222> (C3) — DCA_TWR");
+        // APP: unassigned position renders as open.
+        assert_eq!(groups[2].1[0], "*Open* — FLTRK");
+    }
+
+    #[test]
+    fn event_ping_mentions_are_unique_linked_ids() {
+        let positions = vec![
+            position("A_GND", None, Some("X"), None, Some("100")),
+            position("B_TWR", None, Some("Y"), None, Some("100")),
+            position("C_APP", None, Some("Z"), None, Some("200")),
+            position("D_CTR", None, None, None, None),
+        ];
+        assert_eq!(super::event_ping_mentions(&positions), vec![100, 200]);
     }
 
     #[test]

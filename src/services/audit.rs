@@ -1,9 +1,9 @@
 use chrono::Utc;
 use serenity::{
     all::{
-        AuditLogEntry, ChannelId, ChannelType, Context, GuildChannel, GuildId,
-        GuildMemberUpdateEvent, Member, Message, MessageId, MessageUpdateEvent,
-        PartialGuildChannel, Role, RoleId, Sticker, StickerId, User,
+        AuditLogEntry, ChannelId, Context, GuildChannel, GuildId, GuildMemberUpdateEvent, Member,
+        Message, MessageId, MessageUpdateEvent, PartialGuildChannel, Role, RoleId, Sticker,
+        StickerId, User,
     },
     model::guild::audit_log::{
         Action, ChannelAction, EmojiAction, MemberAction, RoleAction, StickerAction, ThreadAction,
@@ -245,11 +245,7 @@ pub async fn handle_message_delete_bulk(
 }
 
 pub async fn handle_channel_create(ctx: &Context, state: &AppState, channel: GuildChannel) {
-    let action = if channel.kind == ChannelType::Category {
-        Action::Channel(ChannelAction::Create)
-    } else {
-        Action::Channel(ChannelAction::Create)
-    };
+    let action = Action::Channel(ChannelAction::Create);
     let audit = build_channel_event(
         state,
         AuditKind::ChannelCreated,
@@ -448,11 +444,11 @@ pub async fn handle_thread_delete(
         ("Thread ID".to_string(), thread.id.get().to_string()),
         ("Parent ID".to_string(), thread.parent_id.get().to_string()),
     ];
-    if let Some(full) = full_thread_data.as_ref() {
-        if let Some(metadata) = full.thread_metadata.as_ref() {
-            details.push(("Archived".to_string(), metadata.archived.to_string()));
-            details.push(("Locked".to_string(), metadata.locked.to_string()));
-        }
+    if let Some(full) = full_thread_data.as_ref()
+        && let Some(metadata) = full.thread_metadata.as_ref()
+    {
+        details.push(("Archived".to_string(), metadata.archived.to_string()));
+        details.push(("Locked".to_string(), metadata.locked.to_string()));
     }
 
     let audit = enrich_actor(
@@ -505,6 +501,27 @@ pub async fn handle_member_addition(ctx: &Context, state: &AppState, member: Mem
         dedupe_key: Some(format!("audit:member_join:{}", member.user.id.get())),
     };
     let _ = deliver_audit_event(ctx, state, audit).await;
+
+    if state.config.role_sync_on_join {
+        match crate::services::sync_roles_for_discord_id(state, member.user.id.get(), "member_join")
+            .await
+        {
+            Ok(outcome) => {
+                if outcome.linked && (outcome.roles_added > 0 || outcome.roles_removed > 0) {
+                    tracing::info!(
+                        cid = outcome.cid,
+                        discord_id = outcome.discord_id,
+                        roles_added = outcome.roles_added,
+                        roles_removed = outcome.roles_removed,
+                        "applied role sync during member join"
+                    );
+                }
+            }
+            Err(error) => {
+                tracing::error!(?error, "failed role sync during member join");
+            }
+        }
+    }
 }
 
 pub async fn handle_member_removal(
@@ -519,18 +536,18 @@ pub async fn handle_member_removal(
     }
 
     let mut details = vec![("User".to_string(), user_label(&user))];
-    if let Some(member) = member_data {
-        if !member.roles.is_empty() {
-            details.push((
-                "Roles".to_string(),
-                member
-                    .roles
-                    .iter()
-                    .map(|role_id| format!("<@&{}>", role_id.get()))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ));
-        }
+    if let Some(member) = member_data
+        && !member.roles.is_empty()
+    {
+        details.push((
+            "Roles".to_string(),
+            member
+                .roles
+                .iter()
+                .map(|role_id| format!("<@&{}>", role_id.get()))
+                .collect::<Vec<_>>()
+                .join(", "),
+        ));
     }
 
     let audit = AuditEvent {
@@ -787,8 +804,8 @@ pub async fn handle_stickers_update(
     let _ = deliver_audit_event(ctx, state, audit).await;
 }
 
-async fn deliver_audit_event(_ctx: &Context, state: &AppState, event: AuditEvent) -> AppResult<()> {
-    if !state.config.audit_logging_enabled {
+pub async fn publish_audit_event(state: &AppState, event: AuditEvent) -> AppResult<()> {
+    if !state.config.audit_logging_enabled || !state.runtime.feature_enabled("audit_log").await {
         return Ok(());
     }
 
@@ -797,10 +814,10 @@ async fn deliver_audit_event(_ctx: &Context, state: &AppState, event: AuditEvent
         readiness.audit.last_event_at = Some(event.occurred_at);
     }
 
-    if let Some(dedupe_key) = event.dedupe_key.clone() {
-        if state.runtime.mark_delivery_seen(dedupe_key).await {
-            return Ok(());
-        }
+    if let Some(dedupe_key) = event.dedupe_key.clone()
+        && state.runtime.mark_delivery_seen(dedupe_key).await
+    {
+        return Ok(());
     }
 
     let bundle = match state.runtime.config_bundle.read().await.clone() {
@@ -822,6 +839,10 @@ async fn deliver_audit_event(_ctx: &Context, state: &AppState, event: AuditEvent
             Ok(())
         }
     }
+}
+
+async fn deliver_audit_event(_ctx: &Context, state: &AppState, event: AuditEvent) -> AppResult<()> {
+    publish_audit_event(state, event).await
 }
 
 fn build_channel_event(

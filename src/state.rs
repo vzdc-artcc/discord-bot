@@ -3,6 +3,7 @@ use std::{
     sync::Arc,
 };
 
+use serenity::all::Http;
 use tokio::sync::RwLock;
 
 use crate::{
@@ -17,16 +18,24 @@ pub struct AppState {
     pub config: Config,
     pub osmium: OsmiumClient,
     pub runtime: Arc<RuntimeState>,
+    pub discord_http: Arc<Http>,
     pub delivery: Arc<dyn DiscordDelivery>,
 }
 
 pub struct RuntimeState {
     pub readiness: RwLock<ReadinessSnapshot>,
     pub config_bundle: RwLock<Option<DiscordConfigBundle>>,
+    pub feature_flags: RwLock<HashMap<String, bool>>,
     pub staffup_cursor: RwLock<StaffupCursorState>,
     pub break_board_requests: tokio::sync::Mutex<BreakBoardRequestsState>,
     delivery_keys: tokio::sync::Mutex<DeliveryDeduper>,
     recent_messages: tokio::sync::Mutex<RecentMessageCache>,
+}
+
+impl Default for RuntimeState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RuntimeState {
@@ -34,6 +43,7 @@ impl RuntimeState {
         Self {
             readiness: RwLock::new(ReadinessSnapshot::default()),
             config_bundle: RwLock::new(None),
+            feature_flags: RwLock::new(HashMap::new()),
             staffup_cursor: RwLock::new(StaffupCursorState::default()),
             break_board_requests: tokio::sync::Mutex::new(BreakBoardRequestsState::default()),
             delivery_keys: tokio::sync::Mutex::new(DeliveryDeduper::default()),
@@ -44,6 +54,18 @@ impl RuntimeState {
     pub async fn mark_delivery_seen(&self, key: String) -> bool {
         let mut deduper = self.delivery_keys.lock().await;
         deduper.mark_seen(key)
+    }
+
+    /// Whether a bot feature/segment is enabled. Defaults to `true` when the flag
+    /// hasn't been synced yet or is unknown, so features work before the first
+    /// config sync and no feature is silently off due to a missing flag.
+    pub async fn feature_enabled(&self, key: &str) -> bool {
+        self.feature_flags
+            .read()
+            .await
+            .get(key)
+            .copied()
+            .unwrap_or(true)
     }
 
     pub async fn store_message_snapshot(&self, snapshot: MessageSnapshot) {

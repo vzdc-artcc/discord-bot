@@ -15,6 +15,14 @@ Osmium delivers durable outbound jobs to the bot over authenticated HTTP:
 
 - `POST /announcement`
 - `POST /event_position_posting`
+- `POST /role_sync`
+
+Osmium also proxies live guild discovery from the bot so the website's Discord
+configuration UI can populate guild/channel/role dropdowns from real data
+instead of pasted snowflake ids:
+
+- `GET /guilds` — guilds the bot is a member of (`{id, name}`)
+- `GET /guilds/{guild_id}/discovery` — that guild's channels, categories, and roles
 
 Authentication currently accepts:
 

@@ -30,7 +30,11 @@ impl EventHandler for Handler {
                     user_id = command.user.id.get(),
                     "received discord interaction"
                 );
-                if let Err(error) = commands::handle_interaction(&ctx, &self.state, command).await {
+                if !self.state.runtime.feature_enabled("commands").await {
+                    tracing::info!("ignoring slash command; commands feature disabled");
+                } else if let Err(error) =
+                    commands::handle_interaction(&ctx, &self.state, command).await
+                {
                     tracing::error!(?error, "failed to handle slash command");
                 }
             }
@@ -43,27 +47,70 @@ impl EventHandler for Handler {
                     user_id = component.user.id.get(),
                     "received discord interaction"
                 );
-                let handled =
-                    services::handle_impromptu_selector_interaction(&ctx, &self.state, &component)
-                        .await;
-                match handled {
+                match commands::handle_component_interaction(&ctx, &self.state, &component).await {
                     Ok(true) => {}
                     Ok(false) => {
-                        if let Err(error) = services::handle_break_board_component_interaction(
-                            &ctx,
-                            &self.state,
-                            &component,
-                        )
-                        .await
+                        let handled = if self
+                            .state
+                            .runtime
+                            .feature_enabled("impromptu_selector")
+                            .await
                         {
-                            tracing::error!(
-                                ?error,
-                                "failed to handle break board component interaction"
-                            );
+                            services::handle_impromptu_selector_interaction(
+                                &ctx,
+                                &self.state,
+                                &component,
+                            )
+                            .await
+                        } else {
+                            Ok(false)
+                        };
+                        match handled {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                // Try an impromptu-offer Claim button next.
+                                match services::handle_impromptu_offer_claim(
+                                    &ctx,
+                                    &self.state,
+                                    &component,
+                                )
+                                .await
+                                {
+                                    Ok(true) => {}
+                                    Ok(false) => {
+                                        if !self.state.runtime.feature_enabled("break_board").await
+                                        {
+                                            // Break board disabled; nothing more to try.
+                                        } else if let Err(error) =
+                                            services::handle_break_board_component_interaction(
+                                                &ctx,
+                                                &self.state,
+                                                &component,
+                                            )
+                                            .await
+                                        {
+                                            tracing::error!(
+                                                ?error,
+                                                "failed to handle break board component interaction"
+                                            );
+                                        }
+                                    }
+                                    Err(error) => tracing::error!(
+                                        ?error,
+                                        "failed to handle impromptu offer claim"
+                                    ),
+                                }
+                            }
+                            Err(error) => {
+                                tracing::error!(
+                                    ?error,
+                                    "failed to handle impromptu selector interaction"
+                                );
+                            }
                         }
                     }
                     Err(error) => {
-                        tracing::error!(?error, "failed to handle impromptu selector interaction");
+                        tracing::error!(?error, "failed to handle command component interaction");
                     }
                 }
             }
@@ -76,7 +123,9 @@ impl EventHandler for Handler {
                     user_id = modal.user.id.get(),
                     "received discord interaction"
                 );
-                if let Err(error) =
+                if !self.state.runtime.feature_enabled("break_board").await {
+                    tracing::info!("ignoring break board modal; feature disabled");
+                } else if let Err(error) =
                     services::handle_break_board_modal_interaction(&ctx, &self.state, &modal).await
                 {
                     tracing::error!(?error, "failed to handle break board modal interaction");

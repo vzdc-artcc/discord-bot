@@ -1,7 +1,6 @@
 .idea/
 data
 logs
-osmium
 .env
 .ds_store
 # Filled-in k8s manifests hold real secrets — never commit them. The committed
@@ -111,3 +110,4 @@ http-client.private.env.json
 .idea/**/copilot.data.migration.*.xml
 
 /osmium/
+

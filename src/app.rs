@@ -30,6 +30,12 @@ pub async fn run() -> AppResult<()> {
     let osmium = OsmiumClient::new(config.osmium_base_url.clone(), &config.osmium_bearer_token)?;
     let runtime = Arc::new(RuntimeState::new());
     let http_client = Arc::new(Http::new(&config.discord_token));
+    // Slash-command registration (via `delivery`, below) goes through this Http
+    // instance, so it needs the application id set on it directly — the id passed
+    // to `Client::builder().application_id()` only reaches the gateway client's
+    // separate Http, not this one. Without this, registering commands fails with
+    // `Http(ApplicationIdMissing)`.
+    http_client.set_application_id(config.discord_application_id.into());
     let current_user = http_client.get_current_user().await?;
     let delivery = Arc::new(SerenityDiscordService::new(
         http_client.clone(),

@@ -1529,8 +1529,9 @@ fn role_label_from_prefix(role_name: &str, prefix: &str) -> String {
 
 /// ATC position abbreviations that read as acronyms, so a role-name segment like
 /// `twr` renders "TWR" instead of "Twr" (e.g. break board `unrestricted_twr`).
-const UPPERCASE_LABEL_ABBREVIATIONS: &[&str] =
-    &["gnd", "twr", "app", "dep", "ctr", "del", "pct", "apr", "fss", "tmu"];
+const UPPERCASE_LABEL_ABBREVIATIONS: &[&str] = &[
+    "gnd", "twr", "app", "dep", "ctr", "del", "pct", "apr", "fss", "tmu",
+];
 
 fn format_role_label_segment(segment: &str) -> String {
     let lower = segment.to_ascii_lowercase();

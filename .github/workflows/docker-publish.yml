@@ -1,0 +1,122 @@
+name: Docker Publish
+
+# Test → build → push the bot image to GHCR.
+#
+# Runs on `next` for now; `master` will be added later. The branch→tag mapping
+# below already knows `master` → `latest`, so enabling it later is just adding
+# `master` to the two `branches:` lists.
+on:
+  push:
+    branches:
+      - next
+  pull_request:
+    branches:
+      - next
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---- 1. tests / lint (mirrors ci.yml; gates the build) ----
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test --all-targets --all-features
+
+  # ---- 2. build + push (only after tests pass) ----
+  docker:
+    name: Build & Push
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Derive image metadata
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            branch_name="${GITHUB_BASE_REF}"
+          else
+            branch_name="${GITHUB_REF_NAME}"
+          fi
+
+          case "${branch_name}" in
+            next)
+              stable_tag="next"
+              ;;
+            master)
+              stable_tag="latest"
+              ;;
+            *)
+              echo "Unsupported branch for publish workflow: ${branch_name}" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "image_name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "stable_tag=${stable_tag}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ steps.meta.outputs.image_name }}:${{ steps.meta.outputs.stable_tag }}
+            ${{ steps.meta.outputs.image_name }}:${{ steps.meta.outputs.stable_tag }}-${{ steps.meta.outputs.short_sha }}
+          labels: |
+            org.opencontainers.image.created=${{ steps.meta.outputs.created }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.ref.name=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

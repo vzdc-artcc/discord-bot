@@ -22,7 +22,7 @@ pub async fn list_guilds(http: &Http) -> AppResult<GuildListResponse> {
             name: guild.name,
         })
         .collect();
-    discovered.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    discovered.sort_by_key(|a| a.name.to_lowercase());
 
     Ok(GuildListResponse { guilds: discovered })
 }
@@ -62,9 +62,9 @@ pub async fn discover_guild(http: &Http, guild_id: GuildId) -> AppResult<GuildDi
         })
         .collect();
 
-    discovered_channels.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    categories.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    discovered_roles.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    discovered_channels.sort_by_key(|a| a.name.to_lowercase());
+    categories.sort_by_key(|a| a.name.to_lowercase());
+    discovered_roles.sort_by_key(|a| a.name.to_lowercase());
 
     Ok(GuildDiscoveryResponse {
         guild_id: guild_id.get().to_string(),

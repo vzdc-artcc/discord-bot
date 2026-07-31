@@ -1527,7 +1527,17 @@ fn role_label_from_prefix(role_name: &str, prefix: &str) -> String {
         .join(" ")
 }
 
+/// ATC position abbreviations that read as acronyms, so a role-name segment like
+/// `twr` renders "TWR" instead of "Twr" (e.g. break board `unrestricted_twr`).
+const UPPERCASE_LABEL_ABBREVIATIONS: &[&str] =
+    &["gnd", "twr", "app", "dep", "ctr", "del", "pct", "apr", "fss", "tmu"];
+
 fn format_role_label_segment(segment: &str) -> String {
+    let lower = segment.to_ascii_lowercase();
+    if UPPERCASE_LABEL_ABBREVIATIONS.contains(&lower.as_str()) {
+        return lower.to_ascii_uppercase();
+    }
+
     if segment
         .chars()
         .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
@@ -1562,8 +1572,8 @@ mod tests {
     };
 
     use super::{
-        SerenityDiscordService, impromptu_selector_custom_id, impromptu_selector_label,
-        parse_impromptu_selector_custom_id,
+        SerenityDiscordService, break_board_label, impromptu_selector_custom_id,
+        impromptu_selector_label, parse_impromptu_selector_custom_id,
     };
 
     fn service() -> SerenityDiscordService {
@@ -1771,5 +1781,25 @@ mod tests {
             "Ground Training"
         );
         assert_eq!(impromptu_selector_label("impromptu_"), "impromptu_");
+    }
+
+    #[test]
+    fn break_board_labels_render_position_tiers() {
+        assert_eq!(break_board_label("break_board_tier_1_gnd"), "Tier 1 GND");
+        assert_eq!(break_board_label("break_board_tier_1_twr"), "Tier 1 TWR");
+        assert_eq!(
+            break_board_label("break_board_unrestricted_gnd"),
+            "Unrestricted GND"
+        );
+        assert_eq!(
+            break_board_label("break_board_unrestricted_twr"),
+            "Unrestricted TWR"
+        );
+        assert_eq!(
+            break_board_label("break_board_unrestricted_app"),
+            "Unrestricted APP"
+        );
+        assert_eq!(break_board_label("break_board_center"), "Center");
+        assert_eq!(break_board_label("break_board_pct"), "PCT");
     }
 }

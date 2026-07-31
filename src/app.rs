@@ -75,11 +75,25 @@ pub async fn run() -> AppResult<()> {
     start_config_sync_worker(state.clone());
 
     if !state.config.command_guild_ids.is_empty() {
-        let count = state
+        // Non-fatal, matching the impromptu/break-board bootstraps above: if the
+        // bot isn't yet invited to a configured guild with the
+        // `applications.commands` scope, Discord returns 403 Missing Access. Don't
+        // crash the whole bot over it — log a warning so the HTTP API and workers
+        // still run; commands register on the next boot once the invite is fixed.
+        match state
             .delivery
             .register_commands(&state.config.command_guild_ids)
-            .await?;
-        tracing::info!(count, "registered configured slash command sets");
+            .await
+        {
+            Ok(count) => {
+                tracing::info!(count, "registered configured slash command sets")
+            }
+            Err(error) => tracing::warn!(
+                ?error,
+                "failed to register slash commands; ensure the bot is invited to \
+                 each configured guild with the applications.commands scope"
+            ),
+        }
     }
 
     let intents = GatewayIntents::GUILDS
